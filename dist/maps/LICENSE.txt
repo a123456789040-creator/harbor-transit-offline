@@ -1,0 +1,33 @@
+Five-city basemap extracts
+Copyright OpenStreetMap contributors, via Protomaps basemaps.
+Source: https://build.protomaps.com/20261016.pmtiles
+OSM snapshot: 2026-10-16T04:00:00Z. Zoom: 12.
+
+The basemap GeoJSON files hongkong, taipei, newyork, kansai and tokyo
+are derivative databases made available under ODbL 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+Attribution and contributor information:
+https://www.openstreetmap.org/copyright
+
+Processing: extract earth, water, waterways, major roads and OSM green landuse;
+integer polygon union, preserve holes, clip to the per-city bounds in each file.
+These are generalized map features, not survey measurements or live map data.
+The combined game-ready geometry in ../geo-data.mjs retains this basemap license.
+The game code is separate from the basemap database.
+
+taipei-rail.geojson is a separate official-government dataset compilation.
+Sources: National Land Surveying and Mapping Center MRT/LRT routes
+(data.gov.tw datasets 73222/73229, 2026-04-09), supplemented by Taipei GIS
+(data.taipei dataset afccd2ac-75b1-4362-9099-45983e332776, 2026-10-13).
+License: Taiwan Open Government Data License, version 1.0.
+https://data.gov.tw/license
+Processing: TWD97 to WGS84, remove depot branches, clip at operating termini.
+For source URLs and geometry details see sources.html and the GeoJSON metadata.
+
+World history datasets (../*-history-data.mjs) have separate source terms.
+Hong Kong rail curves: OpenStreetMap contributors, ODbL 1.0.
+Japan current rail: MLIT N02-25; chronological station records: MLIT N05-22.
+N05 historical records and derived opening dates are NOT INCLUDED in this public edition. Its non-commercial terms exclude redistribution of database copies.
+https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N05-v2_0.html
+New York current rail: MTA official GTFS; station history supplements cite their own sources.
+See ../sources.html#world-history for precision, source attribution and limitations.

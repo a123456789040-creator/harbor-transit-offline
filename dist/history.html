@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="河港路網"><meta name="apple-mobile-web-app-status-bar-style" content="default"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" sizes="180x180" href="icons/app-180.png">
+  <title>城市軌道時光｜河港路網</title>
+  <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="history.css"><link rel="stylesheet" href="display-settings.css">
+<link rel="stylesheet" href="touch.css"></head>
+<body>
+<main class="history-app">
+  <header class="history-header"><div><p class="eyebrow">HARBOR TRANSIT · 歷史回顧</p><h1 id="history-title">城市軌道時光</h1><p id="history-scope" role="status">正在載入城市圖資與歷史資料…</p></div><nav id="history-city-nav" aria-label="歷史回顧城市"></nav><a href="index.html" class="back-link">返回遊戲 ↗</a></header>
+  <div class="history-workspace">
+    <section class="history-map" aria-label="唯讀歷史路網">
+      <canvas id="history-map" aria-label="依開通日期顯示的實際軌道路線與車站。地圖可縮放平移，不可編輯路網。"></canvas>
+      <div class="history-map-heading"><span class="eyebrow">OPENING CHRONICLE</span><strong id="event-date">載入中</strong><span id="network-count"></span></div>
+      <div id="hover-info" role="status">點選車站看站名 · 雙指縮放／拖曳平移</div>
+      <div class="history-map-credit"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a> · Protomaps<br><span id="history-track-credit">各城市公開圖資</span> · <a id="history-map-source" href="sources.html#history">來源與精度</a></div>
+      <div class="map-controls"><button id="zoom-out" aria-label="縮小地圖">−</button><button id="zoom-in" aria-label="放大地圖">＋</button><button id="zoom-fit">全圖</button></div>
+    </section>
+    <aside class="history-sidebar">
+      <section class="opening-card"><span class="eyebrow" id="opening-phase-label">當次開通</span><h2 id="event-title"></h2><p id="event-note"></p><p id="new-stations"></p><a id="opening-source" target="_blank" rel="noreferrer">查看開通資料 ↗</a><details id="station-inventory"><summary id="station-inventory-summary">全部站點與開通資料</summary><ol id="station-inventory-list"></ol></details></section>
+      <section><h2 class="small-heading"><span id="line-legend-heading">已開通路線</span> <small>依已核實線色</small></h2><div id="line-legend"></div></section>
+      <section><h2 class="small-heading" id="services-heading">交路與線位展示</h2><p id="era-description"></p><details><summary>停靠站與公開班距</summary><div id="services"></div></details><small class="muted">車輛位置、數量與動畫速度為展示；非歷史實際發車紀錄。未核實的歷史班距不回填。</small></section>
+      <section class="ridership"><div class="ridership-heading"><h2 class="small-heading">年度實際運量</h2><select id="ridership-year" aria-label="運量統計年份"></select></div><div id="ridership-values"></div><small class="muted">單位及範圍依各筆來源，● 表示有已收錄統計。各業者／系統不直接相加；年度數字不是通車當日累計。日本會計年度與曆年分別標示，未公布值留空。</small></section>
+      <p class="history-disclosure"><span id="history-disclosure"></span> <a id="history-source-link" href="sources.html#history">資料說明</a></p>
+    </aside>
+  </div>
+  <footer class="history-timeline">
+    <div class="timeline-controls"><button id="history-play" class="primary" aria-pressed="true">暫停回顧 Ⅱ</button><button id="history-prev" aria-label="上一次開通">‹</button><button id="history-next" aria-label="下一次開通">›</button><select id="history-speed" aria-label="回顧播放速度"><option value="1">1× · 每次 7 秒</option><option value="2">2×</option><option value="0.5">0.5×</option></select><span id="event-position"></span></div>
+    <label for="history-position" class="sr-only">開通歷史時間軸</label><input id="history-position" type="range" min="0" max="28" value="0" step="1">
+    <div class="timeline-years"><span id="timeline-first">鐵道啟程</span><span id="timeline-last">今日路網</span></div>
+    <label class="event-select-label" for="history-event">前往通車事件</label><select id="history-event"></select>
+  </footer>
+</main>
+<dialog id="history-setup" aria-labelledby="history-setup-title"><h2 id="history-setup-title">城市軌道時光</h2><label class="history-city-label" for="history-city">選擇回顧城市</label><select id="history-city"></select><p>先調整外觀，再開始歷史回顧。開始後大小設定鎖定。</p><button id="history-future-toggle" class="future-toggle" type="button" aria-pressed="false">未來規劃：關</button><div id="display-settings"></div><button id="history-start" class="primary">開始歷史回顧 ▶</button><details class="home-help"><summary>在 iPhone／iPad 加入主畫面</summary><p>用 Safari 開啟此網址，選「分享」→「加入主畫面」，開啟「打開為網頁 App」（若有此選項），再按「加入」。之後可從主畫面圖示開啟。載入與登入需要網路。</p></details><a class="setup-back" href="index.html">返回遊戲</a></dialog>
+<script type="module" src="history-view.mjs"></script>
+</body></html>
