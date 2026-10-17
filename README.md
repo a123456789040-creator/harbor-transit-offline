@@ -4,7 +4,7 @@
 
 ## 下載與啟動
 
-到 [Releases](https://github.com/a123456789040-creator/harbor-transit-offline/releases/latest) 下載 `HarborTransit-3.0.0-win-x64.zip`。
+到 [Releases](https://github.com/a123456789040-creator/harbor-transit-offline/releases/latest) 下載 `HarborTransit-3.0.1-win-x64.zip`。
 
 1. 將 ZIP **全部解壓縮**到一般資料夾。
 2. 雙擊 `HarborTransit.exe`。程式會開啟預設瀏覽器；遊玩不需要網際網路、帳號、API 金鑰或另裝 Node.js。
@@ -13,6 +13,8 @@
 Windows 10／11 x64，使用已安裝的 Edge 或 Chrome。程式未簽署數位憑證；請核對本倉庫 Release 附的 SHA-256。這是本機瀏覽器遊戲，網址 `127.0.0.1` 代表你的電腦，不會連到作者伺服器。不要直接雙擊 `dist/index.html`。
 
 最高分、城市進度與外觀設定存在此電腦的瀏覽器；不保存當局路網。使用無痕模式或清除網站資料會移除這些紀錄。
+
+BUG 模式左邊的「規劃新站」可開關：手動／自動皆最多新增 50 個額外站點。關閉保留已有站點與路網，不影響真實／官方未來目錄的開放；新遊戲預設開啟。
 
 ## 公開版資料範圍
 

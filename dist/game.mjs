@@ -1,4 +1,4 @@
-import { W,H,RIVER,createState,setRoute,addTrain,addCarriage,chooseUpgrade,advance,trainPosition,routePoints,tunnelsUsed,missionProgress,buildStation,undoStation,launchPlanning,planningProgress } from './core.mjs';
+import { W,H,RIVER,createState,setRoute,addTrain,addCarriage,chooseUpgrade,advance,trainPosition,routePoints,tunnelsUsed,missionProgress,buildStation,undoStation,launchPlanning,planningProgress,generatedStationCount } from './core.mjs';
 import {CITIES,getCity} from './cities.mjs';
 import {ARTIFICIAL_LINES} from './artificial-city.mjs';
 import {futurePreference,saveFuturePreference} from './future-settings.mjs';
@@ -145,6 +145,7 @@ $('clear').onclick=()=>{if(!blocked())applyRoute([]);};
 $('add-train').onclick=()=>{if(blocked())return;const r=addTrain(state,selected);toast(r.message);updateUI();};
 $('add-carriage').onclick=()=>{if(blocked())return;const r=addCarriage(state,selected);toast(r.message);updateUI();};
 $('bug-mode').onclick=()=>{if(blocked()||state.planning)return;state.bugMode=!state.bugMode;toast(state.bugMode?'BUG 模式已開啟：列車、車廂、隧道無限。':'BUG 模式已關閉，已配置的列車、車廂與路線保留。');updateUI();};
+$('planned-growth').onclick=()=>{if(blocked()||state.planning)return;state.plannedGrowth=!state.plannedGrowth;toast(state.plannedGrowth?'規劃新站已開啟：用完城市目錄後最多新增 50 站。':'規劃新站已關閉；既有站點與路網保留，城市目錄照常開放。');updateUI();};
 for(const b of document.querySelectorAll('[data-upgrade]'))b.onclick=()=>{const r=chooseUpgrade(state,b.dataset.upgrade);toast(r.message);updateUI();if(r.ok)$('pause').focus();};
 function reset(){begin(state.mode);}
 $('restart').onclick=reset;
@@ -225,6 +226,8 @@ function updateUI(){
   $('carriage-count').textContent=l.trains.reduce((n,t)=>n+Math.max(0,Math.round((t.capacity-6)/6)),0);
   $('spare-trains').textContent=state.bugMode?'∞':state.depot.trains;$('spare-carriages').textContent=state.bugMode?'∞':state.depot.carriages;
   $('bug-mode').setAttribute('aria-pressed',String(state.bugMode));$('bug-mode').textContent=`BUG 模式：${state.bugMode?'開':'關'}`;
+  $('planned-growth').setAttribute('aria-pressed',String(state.plannedGrowth));$('planned-growth').textContent=`規劃新站：${state.plannedGrowth?'開':'關'}`;$('planned-growth').disabled=blocked();
+  $('planned-growth-note').textContent=`規劃新站 ${generatedStationCount(state)} / 50 · ${state.plannedGrowth?'城市目錄用完後新增，手動／自動皆最多 50 站。':'已關閉，既有車站保留；城市目錄照常開放。'}`;
   const used=planning?0:tunnelsUsed(state);$('spare-tunnels').textContent=state.bugMode?'∞':Math.max(0,state.depot.tunnels-used);$('tunnel-note').textContent=planning?'列車、車廂與跨河資源不限；不列入評分。':`隧道已用 ${used} / ${state.bugMode?'∞':state.depot.tunnels}，${state.bugMode?'跨河不受限制':used>state.depot.tunnels?'縮短或撤線可釋出隧道':'跨河時自動配置'}。`;
   $('trim').disabled=$('clear').disabled=!editable||!l.stops.length||blocked();$('redraw').disabled=!editable||blocked();
   $('add-train').disabled=!editable||blocked()||!l.stops.length||(!state.bugMode&&!state.depot.trains);$('add-carriage').disabled=!editable||blocked()||!l.trains.length||(!state.bugMode&&!state.depot.carriages);
@@ -246,9 +249,9 @@ function updateUI(){
   }prevOver=state.gameOver;
   $('victory').hidden=!state.won;
   if(state.won&&!prevWon){cancelDraft();completed=[...new Set([...completed,state.city.id])];best=Math.max(best,state.delivered);try{localStorage.setItem('harbor-transit-cities',JSON.stringify(completed));localStorage.setItem('harbor-transit-best',String(best));}catch{}$('victory-title').textContent=`${state.city.name}・目標達成！`;$('victory-copy').textContent=`已送達 ${state.delivered} 人，連通 ${progress.connected} 站，營運 ${progress.lines} 條路線。`;$('next-city').textContent=selectedCity==='international'?'返回城市選單':'下一關';$('next-city').focus();updatePicker();}prevWon=state.won;
-  $('planning-controls').hidden=!planning;$('line-filter-label').hidden=!actual;$('auto-mode').closest('.mission').hidden=!!planning;$('bug-mode').hidden=!!planning;$('lines').classList.toggle('planning-lines',actual);
+  $('planning-controls').hidden=!planning;$('line-filter-label').hidden=!actual;$('auto-mode').closest('.mission').hidden=!!planning;$('bug-mode').hidden=$('planned-growth').hidden=$('planned-growth-note').hidden=!!planning;$('lines').classList.toggle('planning-lines',actual);
   if(state.autoMode&&state.autoNetwork)$('status').textContent=`真實站序自動規劃 · ${state.lines.filter(line=>line.autoPattern&&line.stops.length).length} 條實際路線／分支 · ${state.lines.filter(line=>line.autoFeeder&&line.stops.length).length} 條短接駁${state.autoNetwork.waiting?' · '+state.autoNetwork.waiting+' 站待資源補給':''}`;
-  if(state.autoMode&&!state.city?.fictional&&state.mode==='endless'&&state.stations.filter(stop=>stop.real===false&&!stop.planned).length>=50)$('status').textContent+=' · 規劃新站已達 50 站上限';
+  if(state.mode==='endless')$('status').textContent+=!state.plannedGrowth?' · 規劃新站已關閉':generatedStationCount(state)>=50?' · 規劃新站已達 50 站上限':'';
   $('planning-last-result').hidden=!planning?.result;
   if(planning){
     const metrics=planningProgress(state),left=building?planning.limit-planning.elapsed:planning.duration-(state.time-planning.runStart);

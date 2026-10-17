@@ -18,7 +18,7 @@ export function createState(seed = 20261017,options = {}) {
   const s = {stations:[], lines:COLORS.map((color,id) => ({id,color,name:['朱橙線','湛藍線','琥珀線','紫藤線','翠綠線'][id],stops:[],trains:[]})),
     unlocked:3, depot:{trains:3,carriages:1,tunnels:3}, time:0, week:1, delivered:0, gameOver:false, upgrade:false, bugMode:false,
     notice:'選擇路線，拖過車站，開始運送乘客。', rng:(Number.isFinite(seed)?seed:20261017)>>>0, nextGrowth:city?.growth||18, nextWeek:70,
-    city:city||null,mode:options.mode==='endless'?'endless':city?'campaign':'classic',won:false,autoMode:false,world:{...(city?.world||{width:W,height:H})},expansions:[]};
+    city:city||null,mode:options.mode==='endless'?'endless':city?'campaign':'classic',won:false,autoMode:false,plannedGrowth:true,world:{...(city?.world||{width:W,height:H})},expansions:[]};
   if(city&&options.lines?.length){
     s.referenceLineCount=options.lines.length;
     s.lines=Array.from({length:options.lines.length*(planning?1:2)},(_,id)=>{const line=options.lines[id%options.lines.length],name=line.operator?`${line.operator} ${line.name}`:line.name;return {id,name:name+(id>=options.lines.length?' 2':''),color:line.color,referenceId:line.id,stops:[],trains:[]};});s.unlocked=s.lines.length;
@@ -281,12 +281,13 @@ function riverX(y) {
   const i=RIVER.findIndex((p,index)=>index>0 && p.y>=y), a=RIVER[i-1], b=RIVER[i];
   return a.x+(b.x-a.x)*(y-a.y)/(b.y-a.y);
 }
+export function generatedStationCount(s){return s.stations.filter(stop=>stop.generated).length;}
 function grow(s) {
   if(s.city&&s.stations.length<s.city.stations.length){const p=s.city.stations[s.stations.length],shape=SHAPES[Math.floor(random(s)*5)];s.stations.push({...makeStation(s,p.x,p.y,shape),name:p.name,catalogId:p.id,real:!s.city.fictional&&!p.planned,planned:!!p.planned,artificial:!!s.city.fictional,source:p.source||p.wikidata});s.notice=`新站開放：${p.name}`;return;}
   if(s.mode==='campaign'&&s.city)return;
   if(s.mode==='endless'){
-    const planned=s.stations.filter(stop=>stop.real===false&&!stop.artificial&&!stop.planned).length;
-    if(!s.city?.fictional&&s.autoMode&&planned>=50)return;
+    const planned=generatedStationCount(s);
+    if(!s.plannedGrowth||planned>=50)return;
     let p;
     for(let attempt=0;attempt<200;attempt++){
       const x=80+random(s)*(s.world.width-160),y=100+random(s)*(s.world.height-200);
@@ -295,7 +296,7 @@ function grow(s) {
     }
     if(!p){if(s.city?.fictional)return;const x=s.world.width;s.world.width+=280;s.expansions.push({x:x+20,y:50,width:240,height:s.world.height-100});p={x:x+140,y:150+random(s)*(s.world.height-300)};}
     const name=s.city?.fictional?s.city.stations[Math.floor(random(s)*s.city.stations.length)].name:String(planned+1);
-    s.stations.push({...makeStation(s,p.x,p.y,SHAPES[Math.floor(random(s)*5)]),name,real:false,artificial:!!s.city?.fictional});s.notice=`新站 ${name} 開放。`;return;
+    s.stations.push({...makeStation(s,p.x,p.y,SHAPES[Math.floor(random(s)*5)]),name,real:false,generated:true,artificial:!!s.city?.fictional});s.notice=`新站 ${name} 開放。`;return;
   }
   if (s.stations.length>=22) return;
   for (let attempt=0;attempt<100;attempt++) {
