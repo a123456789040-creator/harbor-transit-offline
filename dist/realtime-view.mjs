@@ -1,3 +1,5 @@
+import {startI18n} from './i18n.mjs';
+startI18n();
 import {HISTORY_CITIES,loadHistoryCity} from './history-cities.mjs';
 import {paintTerrain} from './terrain.mjs';
 import {paintRailLines} from './rail-map.mjs';

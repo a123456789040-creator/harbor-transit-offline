@@ -9,13 +9,16 @@ import {mountDisplaySettings} from './display-settings.mjs';
 import {loadHistoryCity} from './history-cities.mjs';
 import {paintRailLines} from './rail-map.mjs';
 import {mountPinchZoom} from './touch-map.mjs';
+import {startI18n,t,language,changeLanguage} from './i18n.mjs';
+
+startI18n();
 
 const $=id=>document.getElementById(id);
 const canvas=$('map'),ctx=canvas.getContext('2d');
 const names=['舊城','中央公園','港口','美術館','北門','大學城','市政廳','南岸','新市場','水岸','東門','圖書館','工藝街','西城','植物園','高鐵站','廣場','工業區','劇院','山麓','新都心','文化園'];
 const symbols={circle:'○',triangle:'△',square:'□',diamond:'◇',star:'☆'};
 const legacy=new URLSearchParams(location.search).has('legacy'),reducedMotion=matchMedia('(prefers-reduced-motion:reduce)').matches;
-let selectedCity=legacy?null:'hongkong',state=createState(Date.now(),{cityId:selectedCity}),selected=0,paused=false,started=false,speed=1,draft=null,redrawing=false,pointer=null,hover=null,toastUntil=0,last=performance.now(),uiElapsed=0,prevUpgrade=false,prevOver=false,prevWon=false,lastStationCount=0,backlog=0,completed=[];
+let selectedCity=legacy?null:CITIES.some(c=>c.id===new URLSearchParams(location.search).get('city'))?new URLSearchParams(location.search).get('city'):'hongkong',state=createState(Date.now(),{cityId:selectedCity}),selected=0,paused=false,started=false,speed=1,draft=null,redrawing=false,pointer=null,hover=null,toastUntil=0,last=performance.now(),uiElapsed=0,prevUpgrade=false,prevOver=false,prevWon=false,lastStationCount=0,backlog=0,completed=[];
 let transform={scale:1,x:0,y:0},best=0,viewZoom=matchMedia('(max-width:720px)').matches?1.65:1,panX=0,panY=0,panning=null;
 let terrainCache=null,buildingTool=false,previousPlanningPhase=null,autoLoading=false,insertion=null,pendingBuild=null;
 const referenceModels=new Map(),referenceLoads=new Map();
@@ -31,12 +34,14 @@ function loadReference(id){
   return referenceLoads.get(key);
 }
 const display=mountDisplaySettings($('display-settings'));
+$('language-select').value=language;
+$('language-select').onchange=()=>changeLanguage($('language-select').value,selectedCity);
 try{best=Number(localStorage.getItem('harbor-transit-best'))||0;}catch{}
 try{completed=JSON.parse(localStorage.getItem('harbor-transit-cities'))||[];if(!Array.isArray(completed))completed=[];}catch{}
-const label=s=>s.name||names[s.id]||`第 ${s.id+1} 站`;
+const label=s=>t(s.name||names[s.id]||`第 ${s.id+1} 站`);
 const line=()=>state.lines[selected];
 const stationScale=(scale=1)=>state.city ? .5/Math.max(1,scale) : 1;
-function toast(message){$('toast').textContent=message;$('toast').classList.add('visible');toastUntil=performance.now()+3200;}
+function toast(message){$('toast').textContent=t(message);$('toast').classList.add('visible');toastUntil=performance.now()+3200;}
 function blocked(){return !started||state.upgrade||state.gameOver||state.won||$('help-dialog').open;}
 function cancelDraft(){draft=null;insertion=null;redrawing=false;pointer=null;pendingBuild=null;$('draw-hint').hidden=true;}
 function selectLine(id){if(id>=state.unlocked)return;selected=id;buildingTool=false;cancelDraft();updateUI();}
@@ -149,7 +154,7 @@ $('planned-growth').onclick=()=>{if(blocked()||state.planning)return;state.plann
 for(const b of document.querySelectorAll('[data-upgrade]'))b.onclick=()=>{const r=chooseUpgrade(state,b.dataset.upgrade);toast(r.message);updateUI();if(r.ok)$('pause').focus();};
 function reset(){begin(state.mode);}
 $('restart').onclick=reset;
-$('new-game').onclick=()=>{if(!started)return;if(state.time>0&&!state.gameOver){if(!confirm('重新開始本局？目前的路網與分數會重設，最高分保留。'))return;}reset();};
+$('new-game').onclick=()=>{if(!started)return;if(state.time>0&&!state.gameOver){if(!confirm(t('重新開始本局？目前的路網與分數會重設，最高分保留。')))return;}reset();};
 $('help').onclick=()=>{cancelDraft();$('help-dialog').showModal();};
 $('map-sources').onclick=()=>$('help-dialog').showModal();
 $('auto-mode').onclick=async()=>{if(blocked()||state.planning)return;if(state.autoMode){state.autoMode=false;toast('自動模式已關閉，保留目前路網，可自行調度。');updateUI();return;}
@@ -161,6 +166,7 @@ $('auto-mode').onclick=async()=>{if(blocked()||state.planning)return;if(state.au
   cancelDraft();state.autoMode=true;paused=false;autoManage(state);renderLines();backlog=0;last=performance.now();$('auto-mode').disabled=false;toast(state.autoNetwork?'自動模式：依真實站序分線、保留轉乘，孤站以短接駁銜接。':'自動模式已開啟。');updateUI();};
 function chooseCity(id){terrainCache=null;selectedCity=id;state=createState(Date.now(),{cityId:id,city:referenceFor(id)?.city||undefined});selected=0;lastStationCount=0;panX=panY=0;viewZoom=1;buildingTool=false;renderLines();loadReference(id);updatePicker();updateUI();}
 function updatePicker(){
+  $('language-select').disabled=started;
   for(const b of document.querySelectorAll('[data-city]')){b.setAttribute('aria-pressed',String(b.dataset.city===selectedCity));b.querySelector('small').textContent=completed.includes(b.dataset.city)?'✓ 已完成':'';}
   const selectedFuture=referenceFor(selectedCity)?.future;$('future-toggle').disabled=started||!!getCity(selectedCity)?.fictional;$('future-toggle').setAttribute('aria-pressed',String(futureFor(selectedCity)));$('future-toggle').textContent=`未來規劃：${futureFor(selectedCity)?'開':'關'}`;$('future-note').textContent=getCity(selectedCity)?.fictional?'人工城市不套用未來路線；站名隨機取自五城。':selectedFuture?`已收錄 ${selectedFuture.projects.length} 個官方計畫、${selectedFuture.newStations} 個新增站點；預計時程與虛線線位為規劃示意。`:'開啟可加入五城官方未來站點與路線；預計時間不代表已通車。';
   const city=getCity(selectedCity);$('city-description').textContent=city?.description||'原創河港市經典玩法。';$('preview-goal').textContent=city?`關卡目標：送達 ${city.goal.delivered} 人 · 連接 ${city.goal.connected} 站 · 營運 ${city.goal.lines} 線`:'自由規劃';
@@ -174,7 +180,7 @@ function updatePicker(){
 }
 $('future-toggle').onclick=()=>{if(started)return;futureEnabled=!futureEnabled;saveFuturePreference(futureEnabled);const url=new URL(location.href);url.searchParams.delete('future');history.replaceState(null,'',url);chooseCity(selectedCity);};
 for(const city of CITIES){const b=document.createElement('button');b.dataset.city=city.id;b.setAttribute('aria-pressed','false');b.innerHTML=`<strong>${city.name}</strong><span>${city.fictional?'三層人工大陸・2400 × 2400':`${city.stations.length} 個真實車站`}</span><small></small>`;b.onclick=()=>chooseCity(city.id);$('city-options').append(b);}
-$('city-menu').onclick=()=>{if(started&&!state.gameOver&&!state.won&&(state.time>0||state.planning?.elapsed>0)&&!confirm('切換城市將重設本局，完成紀錄與最高分保留。'))return;started=false;display.unlock();cancelDraft();$('intro').hidden=false;$('gameover').hidden=$('victory').hidden=$('upgrade').hidden=true;chooseCity(selectedCity||'hongkong');document.querySelector(`[data-city="${selectedCity}"]`).focus();};
+$('city-menu').onclick=()=>{if(started&&!state.gameOver&&!state.won&&(state.time>0||state.planning?.elapsed>0)&&!confirm(t('切換城市將重設本局，完成紀錄與最高分保留。')))return;started=false;display.unlock();cancelDraft();$('intro').hidden=false;$('gameover').hidden=$('victory').hidden=$('upgrade').hidden=true;chooseCity(selectedCity||'hongkong');document.querySelector(`[data-city="${selectedCity}"]`).focus();};
 $('next-city').onclick=()=>{const index=CITIES.findIndex(c=>c.id===selectedCity);if(index===CITIES.length-1){$('city-menu').click();return;}selectedCity=CITIES[index+1].id;begin('campaign');};
 $('continue-endless').onclick=()=>{state.mode='endless';state.won=false;state.upgrade=false;prevWon=false;$('victory').hidden=true;last=performance.now();backlog=0;updateUI();$('pause').focus();};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&started&&!state.gameOver&&!state.autoMode&&state.mode!=='endless'&&!state.planning){paused=true;cancelDraft();last=performance.now();updateUI();}});
@@ -305,14 +311,14 @@ function draw(now){
   }
   ctx.translate(transform.x,transform.y);ctx.scale(scale,scale);
   if(state.city){
-    for(const area of state.expansions){ctx.fillStyle='#f5f7f6';ctx.fillRect(area.x,area.y,area.width,area.height);ctx.strokeStyle='#bfd4da';ctx.strokeRect(area.x,area.y,area.width,area.height);ctx.fillStyle='#819aa7';ctx.font='12px sans-serif';ctx.fillText('新城規劃區',area.x+20,area.y+25);}
-    for(const region of state.city.labels){ctx.fillStyle='#6c8a98';ctx.font='13px "Microsoft JhengHei",sans-serif';ctx.fillText(region.name,region.x,region.y);}
+    for(const area of state.expansions){ctx.fillStyle='#f5f7f6';ctx.fillRect(area.x,area.y,area.width,area.height);ctx.strokeStyle='#bfd4da';ctx.strokeRect(area.x,area.y,area.width,area.height);ctx.fillStyle='#819aa7';ctx.font='12px sans-serif';ctx.fillText(t('新城規劃區'),area.x+20,area.y+25);}
+    for(const region of state.city.labels){ctx.fillStyle='#6c8a98';ctx.font='13px "Microsoft JhengHei",sans-serif';ctx.fillText(t(region.name),region.x,region.y);}
   }
   ctx.strokeStyle='#e7edeb';ctx.lineWidth=1;
   const gridLeft=Math.max(30,Math.floor(-transform.x/scale/48)*48+30),gridRight=Math.min(world.width,(rect.width-transform.x)/scale);
   if(!state.city)for(let x=gridLeft;x<gridRight;x+=48)for(let y=50;y<world.height-20;y+=48){ctx.beginPath();ctx.arc(x,y,1,0,Math.PI*2);ctx.fillStyle='#dfe8e7';ctx.fill();}
   ctx.lineJoin='round';ctx.lineCap='round';
-  if(!state.city){path(RIVER);ctx.strokeStyle='#bdd9e2';ctx.lineWidth=62;ctx.stroke();path(RIVER);ctx.strokeStyle='#d1e5ec';ctx.lineWidth=56;ctx.stroke();ctx.save();ctx.translate(590,520);ctx.rotate(-1.28);ctx.fillStyle='#79a9ba';ctx.font='12px "Microsoft JhengHei",sans-serif';ctx.fillText('河 港 川',0,0);ctx.restore();ctx.font='11px "Microsoft JhengHei",sans-serif';ctx.fillStyle='#b5c4c8';ctx.fillText('舊 城 區',155,160);ctx.fillText('河 岸 新 城',780,480);ctx.fillText('北 港',760,110);}
+  if(!state.city){path(RIVER);ctx.strokeStyle='#bdd9e2';ctx.lineWidth=62;ctx.stroke();path(RIVER);ctx.strokeStyle='#d1e5ec';ctx.lineWidth=56;ctx.stroke();ctx.save();ctx.translate(590,520);ctx.rotate(-1.28);ctx.fillStyle='#79a9ba';ctx.font='12px "Microsoft JhengHei",sans-serif';ctx.fillText(t('河 港 川'),0,0);ctx.restore();ctx.font='11px "Microsoft JhengHei",sans-serif';ctx.fillStyle='#b5c4c8';ctx.fillText(t('舊 城 區'),155,160);ctx.fillText(t('河 岸 新 城'),780,480);ctx.fillText(t('北 港'),760,110);}
   const lineSize=display.values.line/100/(state.city?Math.max(1,scale):1);
   for(const l of state.lines){if(l.stops.length<2)continue;path(routePoints(state,l.stops));ctx.strokeStyle='#f5f7f6';ctx.lineWidth=(l.id===selected?9:7)*lineSize;ctx.stroke();path(routePoints(state,l.stops));ctx.strokeStyle=l.color;ctx.globalAlpha=l.id===selected?1:.66;ctx.lineWidth=(l.id===selected?7:5)*lineSize;ctx.stroke();ctx.globalAlpha=1;}
   if(draft?.length>=2){path(routePoints(state,draft));ctx.setLineDash([10,7].map(n=>n/(state.city?Math.max(1,scale):1)));ctx.strokeStyle=line().color;ctx.lineWidth=7*lineSize;ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);}

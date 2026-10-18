@@ -21,7 +21,7 @@ foreach($taskFile in @('node.exe','LICENSE')){if(-not (Test-Path -LiteralPath (J
 $taskCompiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if(-not (Test-Path -LiteralPath $taskCompiler)){throw 'Windows .NET Framework compiler missing'}
 New-Item -ItemType Directory -Force -Path (Join-Path $taskOutput 'runtime') | Out-Null
-foreach($taskFile in @('dist','server.mjs','release.json','README.md','LICENSE','THIRD_PARTY_NOTICES.md')){Copy-Item -LiteralPath (Join-Path $taskRoot $taskFile) -Destination $taskOutput -Recurse}
+foreach($taskFile in @('dist','server.mjs','release.json','README.md','README-en.md','LICENSE','THIRD_PARTY_NOTICES.md')){Copy-Item -LiteralPath (Join-Path $taskRoot $taskFile) -Destination $taskOutput -Recurse}
 Copy-Item -LiteralPath (Join-Path $NodeDirectory 'node.exe') -Destination (Join-Path $taskOutput 'runtime\node.exe')
 Copy-Item -LiteralPath (Join-Path $NodeDirectory 'LICENSE') -Destination (Join-Path $taskOutput 'runtime\LICENSE.txt')
 & $taskCompiler /nologo /target:winexe /platform:x64 /codepage:65001 /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll ('/out:'+(Join-Path $taskOutput 'HarborTransit.exe')) (Join-Path $taskRoot 'scripts\Launcher.cs')

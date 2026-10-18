@@ -1,10 +1,12 @@
 # 河港路網 Harbor Transit · 離線版
 
+[English instructions](README-en.md) · 主選單「語言 / Language」可切換繁體中文／English，會記住選擇並套用到遊戲、規劃、歷史、時刻展示、說明及資料來源。站名／路線專名無已核實英譯時保留原文。
+
 原創單人捷運規劃遊戲。香港、台北、紐約、東京、大阪・京都與環海自建城；包含關卡、自動調度、BUG 資源、過關後無盡玩法、5 分鐘規劃／10 秒運行循環、未來路網開關與歷史／路網觀賞。
 
 ## 下載與啟動
 
-到 [Releases](https://github.com/a123456789040-creator/harbor-transit-offline/releases/latest) 下載 `HarborTransit-3.0.1-win-x64.zip`。
+到 [Releases](https://github.com/a123456789040-creator/harbor-transit-offline/releases/latest) 下載 `HarborTransit-3.1.0-win-x64.zip`。
 
 1. 將 ZIP **全部解壓縮**到一般資料夾。
 2. 雙擊 `HarborTransit.exe`。程式會開啟預設瀏覽器；遊玩不需要網際網路、帳號、API 金鑰或另裝 Node.js。

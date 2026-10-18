@@ -1,10 +1,10 @@
 {
   "name": "harbor-transit-offline",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node tests/planned-growth.test.mjs && node tests/offline.test.mjs"
+    "test": "node tests/i18n.test.mjs && node tests/planned-growth.test.mjs && node tests/offline.test.mjs"
   }
 }
