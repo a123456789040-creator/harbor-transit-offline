@@ -1,4 +1,4 @@
-import { W,H,RIVER,createState,setRoute,addTrain,addCarriage,chooseUpgrade,advance,trainPosition,routePoints,tunnelsUsed,missionProgress,buildStation,undoStation,launchPlanning,planningProgress,generatedStationCount } from './core.mjs';
+import { W,H,RIVER,createState,setRoute,removeSegment,hasSegment,lineSections,connectedStationIds,addTrain,addCarriage,chooseUpgrade,advance,trainPosition,routePoints,tunnelsUsed,missionProgress,buildStation,undoStation,launchPlanning,planningProgress,generatedStationCount } from './core.mjs';
 import {CITIES,getCity} from './cities.mjs';
 import {ARTIFICIAL_LINES} from './artificial-city.mjs';
 import {futurePreference,saveFuturePreference} from './future-settings.mjs';
@@ -20,7 +20,7 @@ const symbols={circle:'○',triangle:'△',square:'□',diamond:'◇',star:'☆'
 const legacy=new URLSearchParams(location.search).has('legacy'),reducedMotion=matchMedia('(prefers-reduced-motion:reduce)').matches;
 let selectedCity=legacy?null:CITIES.some(c=>c.id===new URLSearchParams(location.search).get('city'))?new URLSearchParams(location.search).get('city'):'hongkong',state=createState(Date.now(),{cityId:selectedCity}),selected=0,paused=false,started=false,speed=1,draft=null,redrawing=false,pointer=null,hover=null,toastUntil=0,last=performance.now(),uiElapsed=0,prevUpgrade=false,prevOver=false,prevWon=false,lastStationCount=0,backlog=0,completed=[];
 let transform={scale:1,x:0,y:0},best=0,viewZoom=matchMedia('(max-width:720px)').matches?1.65:1,panX=0,panY=0,panning=null;
-let terrainCache=null,buildingTool=false,previousPlanningPhase=null,autoLoading=false,insertion=null,pendingBuild=null;
+let terrainCache=null,buildingTool=false,previousPlanningPhase=null,autoLoading=false,insertion=null,pendingBuild=null,repair=null,focusedStationId=null;
 const referenceModels=new Map(),referenceLoads=new Map();
 let futureEnabled=futurePreference();
 const futureFor=id=>!!id&&futureEnabled&&!getCity(id)?.fictional,referenceKey=id=>id+(futureFor(id)?':future':''),referenceFor=id=>referenceModels.get(referenceKey(id));
@@ -43,13 +43,14 @@ const line=()=>state.lines[selected];
 const stationScale=(scale=1)=>state.city ? .5/Math.max(1,scale) : 1;
 function toast(message){$('toast').textContent=t(message);$('toast').classList.add('visible');toastUntil=performance.now()+3200;}
 function blocked(){return !started||state.upgrade||state.gameOver||state.won||$('help-dialog').open;}
-function cancelDraft(){draft=null;insertion=null;redrawing=false;pointer=null;pendingBuild=null;$('draw-hint').hidden=true;}
+function cancelDraft(){draft=null;insertion=null;repair=null;redrawing=false;pointer=null;pendingBuild=null;$('draw-hint').hidden=true;}
 function selectLine(id){if(id>=state.unlocked)return;selected=id;buildingTool=false;cancelDraft();updateUI();}
-function applyRoute(stops){const r=setRoute(state,selected,stops);toast(r.message||(r.ok?'路線已更新':'無法套用路線'));cancelDraft();updateUI();return r.ok;}
+const segmentKey=(a,b)=>a<b?`${a}:${b}`:`${b}:${a}`;
+function applyRoute(stops,repaired=null){const edges=stops.slice(1).map((id,i)=>segmentKey(stops[i],id)),breaks=redrawing?[]:(line().breaks||[]).filter(key=>key!==repaired&&edges.includes(key));const r=setRoute(state,selected,stops,{breaks});toast(r.message||(r.ok?'路線已更新':'無法套用路線'));cancelDraft();updateUI();return r.ok;}
 function startInsertion(index){draft=[...line().stops];insertion={start:index,at:index};}
 function showDrawHint(){
   $('draw-hint').hidden=false;
-  $('draw-text').textContent=`${(state.referenceLineCount||state.autoNetwork)?line().name:String.fromCharCode(65+selected)+' 線'} · ${insertion?'從中段插站，保留兩側路線':'繼續連到下一站'}`;
+  $('draw-text').textContent=`${(state.referenceLineCount||state.autoNetwork)?line().name:String.fromCharCode(65+selected)+' 線'} · ${repair?'重新接回另一個斷點，可途經新站':insertion?'從中段插站，保留兩側路線':'繼續連到下一站'}`;
 }
 function stationPoint(id){
   if(blocked())return;
@@ -60,11 +61,18 @@ function stationPoint(id){
   if(state.planning&&state.planning.phase!=='building')return;
   if(!draft){
     if(redrawing||!route.length)draft=[id];
+    else if(line().breaks?.length&&route.some((stop,i)=>i&&!hasSegment(line(),i)&&(stop===id||route[i-1]===id))){
+      const index=route.findIndex((stop,i)=>i&&!hasSegment(line(),i)&&(stop===id||route[i-1]===id));
+      repair={index,start:id,end:route[index]===id?route[index-1]:route[index],reverse:route[index]===id};draft=[id];
+    }
     else if(route.includes(id)&&route[0]===route.at(-1))startInsertion(route.indexOf(id)+1);
     else if(route.at(-1)===id)draft=[...route];
     else if(route[0]===id)draft=[...route].reverse();
     else if(route.includes(id))startInsertion(route.indexOf(id)+1);
     else return;
+  }else if(repair){
+    if(draft.at(-2)===id)draft.pop();
+    else if(id!==draft.at(-1)&&(!route.includes(id)||id===repair.end)&&!draft.includes(id))draft.push(id);
   }else if(insertion){
     if(insertion.at>insertion.start&&draft[insertion.at-2]===id){draft.splice(--insertion.at,1);}
     else if(!draft.includes(id)){draft.splice(insertion.at++,0,id);}
@@ -76,23 +84,36 @@ function stationPoint(id){
 }
 function finishDraw(){
   pointer=null;
+  if(repair){
+    if(draft?.at(-1)!==repair.end)return;
+    const route=line().stops,part=repair.reverse?[...draft].reverse():draft,index=repair.index;
+    applyRoute([...route.slice(0,index),...part.slice(1,-1),...route.slice(index)],segmentKey(repair.start,repair.end));return;
+  }
   if(draft?.length>=2){
     if(JSON.stringify(draft)!==JSON.stringify(line().stops))applyRoute(draft);
   }
 }
 function mapPoint(event){const r=canvas.getBoundingClientRect();return {x:(event.clientX-r.left-transform.x)/transform.scale,y:(event.clientY-r.top-transform.y)/transform.scale};}
 function hit(p){let nearest,dist=25*stationScale(transform.scale)/Math.min(1,transform.scale);for(const s of state.stations){const d=Math.hypot(s.x-p.x,s.y-p.y);if(d<dist){dist=d;nearest=s;}}return nearest;}
-function hitSegment(p,radius){
+function hitSegment(p,radius,target=line()){
   if(redrawing||(state.planning&&state.planning.phase!=='building'))return null;
-  let index=null,nearest=radius/transform.scale;const stops=line().stops;
+  let index=null,nearest=radius/transform.scale;const stops=target.stops;
   for(let i=1;i<stops.length;i++){
+    if(!hasSegment(target,i))continue;
     const points=routePoints(state,stops.slice(i-1,i+1));
     for(let j=1;j<points.length;j++){const a=points[j-1],b=points[j],dx=b.x-a.x,dy=b.y-a.y,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1))),distance=Math.hypot(p.x-a.x-t*dx,p.y-a.y-t*dy);if(distance<nearest){nearest=distance;index=i;}}
   }
   return index;
 }
 canvas.addEventListener('pointerdown',event=>{
-  if(event.button!==0||blocked()||pinch.active)return;
+  if(blocked()||pinch.active)return;
+  if(event.button===1){
+    event.preventDefault();if(state.planning)return;
+    const p=mapPoint(event),targets=[line(),...state.lines.filter(l=>l.id!==selected)];
+    for(const target of targets){const index=hitSegment(p,7,target);if(index===null)continue;cancelDraft();selectLine(target.id);const response=removeSegment(state,target.id,index);toast(response.message);updateUI();break;}
+    return;
+  }
+  if(event.button!==0)return;
   const p=mapPoint(event),station=hit(p);
   if(state.planning?.phase==='building'&&buildingTool){
     if(event.pointerType==='touch'){pendingBuild={id:event.pointerId,p,x:event.clientX,y:event.clientY};canvas.setPointerCapture(event.pointerId);}else placeStation(p);
@@ -116,6 +137,7 @@ canvas.addEventListener('pointerup',event=>{if(pendingBuild?.id===event.pointerI
 canvas.addEventListener('pointercancel',()=>{panning=null;cancelDraft();});
 canvas.addEventListener('lostpointercapture',()=>{pointer=null;});
 canvas.addEventListener('pointerleave',()=>{hover=null;});
+canvas.addEventListener('auxclick',event=>{if(event.button===1)event.preventDefault();});
 function placeStation(p){const result=buildStation(state,p.x,p.y,$('station-type').value||undefined);toast(result.message);if(result.ok)cancelDraft();updateUI();}
 canvas.addEventListener('contextmenu',event=>{if(state.mode!=='planning')return;event.preventDefault();if(!blocked())placeStation(mapPoint(event));});
 $('build-tool').onclick=()=>{if(state.planning?.phase!=='building')return;buildingTool=!buildingTool;cancelDraft();updateUI();};
@@ -128,11 +150,19 @@ const pinch=mountPinchZoom(canvas,{enabled:()=>!blocked(),cancel:()=>{panning=nu
   const old=viewZoom;viewZoom=Math.max(1,Math.min(8,viewZoom*ratio));const factor=viewZoom/old,cx=canvas.clientWidth/2,cy=(canvas.clientHeight+55)/2;
   panX=(panX+cx-from.x)*factor-cx+to.x;panY=(panY+cy-from.y)*factor-cy+to.y;
 }});
+$('unplanned-stations').onclick=()=>{
+  if(blocked())return;
+  const connected=connectedStationIds(state),waiting=state.stations.filter(stop=>!connected.has(stop.id));if(!waiting.length)return;
+  const stop=waiting[(waiting.findIndex(stop=>stop.id===focusedStationId)+1)%waiting.length];focusedStationId=stop.id;cancelDraft();
+  viewZoom=Math.max(2,viewZoom);const rect=canvas.getBoundingClientRect(),scale=Math.min(rect.width/state.world.width,(rect.height-65)/state.world.height)*viewZoom;
+  panX=(state.world.width/2-stop.x)*scale;panY=(state.world.height/2-stop.y)*scale;
+  $('station-title').textContent=`${symbols[stop.shape]} ${label(stop)}`;toast(`未規劃車站：${label(stop)}`);
+};
 async function begin(mode='campaign'){
   const id=selectedCity,network=id?await loadReference(id):null;
   if(id!==selectedCity)return;
   if(id&&!network?.lines.length){toast('城市實際路線尚未載入，請稍後重試。');return;}
-  state=createState(mode==='planning'?20261017:Date.now(),{cityId:id,city:network?.city||undefined,mode,lines:network?.lines,referenceStations:network?.stations});selected=0;paused=false;started=true;speed=1;backlog=0;last=performance.now();prevWon=prevOver=prevUpgrade=false;lastStationCount=0;panX=panY=0;viewZoom=state.city?1:matchMedia('(max-width:720px)').matches?1.65:1;cancelDraft();buildingTool=false;previousPlanningPhase=null;renderLines();$('line-filter').value='';
+  state=createState(mode==='planning'?20261017:Date.now(),{cityId:id,city:network?.city||undefined,mode,lines:network?.lines,referenceStations:network?.stations,stationGeneration:$('station-generation').value});selected=0;paused=false;started=true;speed=1;backlog=0;last=performance.now();prevWon=prevOver=prevUpgrade=false;lastStationCount=0;panX=panY=0;focusedStationId=null;viewZoom=state.city?1:matchMedia('(max-width:720px)').matches?1.65:1;cancelDraft();buildingTool=false;previousPlanningPhase=null;renderLines();$('line-filter').value='';
   loadReference(selectedCity);updatePicker();
   display.lock();
   for(const id of ['intro','gameover','upgrade','victory'])$(id).hidden=true;$('station-buttons').replaceChildren();
@@ -167,6 +197,7 @@ $('auto-mode').onclick=async()=>{if(blocked()||state.planning)return;if(state.au
 function chooseCity(id){terrainCache=null;selectedCity=id;state=createState(Date.now(),{cityId:id,city:referenceFor(id)?.city||undefined});selected=0;lastStationCount=0;panX=panY=0;viewZoom=1;buildingTool=false;renderLines();loadReference(id);updatePicker();updateUI();}
 function updatePicker(){
   $('language-select').disabled=started;
+  $('station-generation').disabled=started||legacy;
   for(const b of document.querySelectorAll('[data-city]')){b.setAttribute('aria-pressed',String(b.dataset.city===selectedCity));b.querySelector('small').textContent=completed.includes(b.dataset.city)?'✓ 已完成':'';}
   const selectedFuture=referenceFor(selectedCity)?.future;$('future-toggle').disabled=started||!!getCity(selectedCity)?.fictional;$('future-toggle').setAttribute('aria-pressed',String(futureFor(selectedCity)));$('future-toggle').textContent=`未來規劃：${futureFor(selectedCity)?'開':'關'}`;$('future-note').textContent=getCity(selectedCity)?.fictional?'人工城市不套用未來路線；站名隨機取自五城。':selectedFuture?`已收錄 ${selectedFuture.projects.length} 個官方計畫、${selectedFuture.newStations} 個新增站點；預計時程與虛線線位為規劃示意。`:'開啟可加入五城官方未來站點與路線；預計時間不代表已通車。';
   const city=getCity(selectedCity);$('city-description').textContent=city?.description||'原創河港市經典玩法。';$('preview-goal').textContent=city?`關卡目標：送達 ${city.goal.delivered} 人 · 連接 ${city.goal.connected} 站 · 營運 ${city.goal.lines} 線`:'自由規劃';
@@ -210,7 +241,10 @@ function updateUI(){
   if($('lines').children.length!==state.lines.length)renderLines();
   const modalOpen=!started||state.upgrade||state.gameOver||state.won;
   for(const element of document.querySelectorAll('.sidebar,.transport,.topbar,.map-controls'))element.inert=modalOpen;
-  const l=line(),active=state.lines.flatMap(l=>l.stops);
+  const l=line(),active=connectedStationIds(state),waiting=state.stations.filter(stop=>!active.has(stop.id));
+  $('unplanned-control').hidden=!started||!!planning;$('unplanned-stations').disabled=blocked()||!waiting.length;$('unplanned-count').textContent=waiting.length;
+  $('unplanned-stations').setAttribute('aria-label',t(`未規劃車站 ${waiting.length} 站，點擊定位下一站`));
+  if(active.has(focusedStationId))focusedStationId=null;
   const progress=missionProgress(state),goal=progress.goal;
   $('city-caption').textContent=state.city?.name||'河港市';$('mode-caption').textContent=state.mode==='endless'?'無盡模式 · 持續增站':state.city?'目標關卡':'自由規劃 · 經典模式';
   $('map-credit').firstChild.textContent=state.city?.fictional?'原創人工大陸・站名隨機取自五城':state.city?'歷史回顧同款地圖・淡色為實際軌道參考':'原創河港市';
@@ -223,11 +257,11 @@ function updateUI(){
   $('score').textContent=state.delivered.toLocaleString();$('week').textContent=`第 ${state.week} 週`;
   const phase=(state.time%70)/70;
   $('day').textContent=['星期一','星期二','星期三','星期四','星期五','星期六','星期日'][Math.min(6,Math.floor(phase*7))];$('week-progress').style.width=`${phase*100}%`;
-  $('connected').textContent=`${new Set(active).size} / ${state.stations.length} 站已連接`;
-  for(let i=0;i<state.lines.length;i++){const b=$(`line-${i}`),current=state.lines[i];b.hidden=actual&&!current.name.toLocaleLowerCase().includes($('line-filter').value.trim().toLocaleLowerCase());b.disabled=i>=state.unlocked;b.setAttribute('aria-pressed',String(i===selected));b.setAttribute('aria-label',`選擇 ${actual?current.name:String.fromCharCode(65+i)+' 線'}`);b.style.setProperty('--route',current.color);b.querySelector('strong').textContent=current.name;b.querySelector('small').textContent=i>=state.unlocked?'週末解鎖':current.stops.length?`${new Set(current.stops).size} 站`:actual?'待分配':'未開通';}
+  $('connected').textContent=`${active.size} / ${state.stations.length} 站已連接`;
+  for(let i=0;i<state.lines.length;i++){const b=$(`line-${i}`),current=state.lines[i];b.hidden=actual&&!current.name.toLocaleLowerCase().includes($('line-filter').value.trim().toLocaleLowerCase());b.disabled=i>=state.unlocked;b.setAttribute('aria-pressed',String(i===selected));b.setAttribute('aria-label',`選擇 ${actual?current.name:String.fromCharCode(65+i)+' 線'}`);b.style.setProperty('--route',current.color);b.querySelector('strong').textContent=current.name;b.querySelector('small').textContent=i>=state.unlocked?'週末解鎖':current.stops.length?`${new Set(lineSections(current).flat()).size} 站`:actual?'待分配':'未開通';}
   $('selected-color').style.background=l.color;$('selected-name').textContent=actual?l.name:`${String.fromCharCode(65+selected)} 線`;
-  $('route-count').textContent=l.stops.length?`${new Set(l.stops).size} 站 · ${l.stops[0]===l.stops.at(-1)?'環線':'往返'}`:'尚未開通';
-  $('route-instruction').textContent=l.stops.length?'端點可延伸；從中間站或線段拖到新站可插站，保留兩側路線。分支可另選一條線，從共站接出。':'從任意一站拖曳到另一站，建立路線。';
+  $('route-count').textContent=l.breaks?.length?`${new Set(lineSections(l).flat()).size} 站 · 分段路線`:l.stops.length?`${new Set(l.stops).size} 站 · ${l.stops[0]===l.stops.at(-1)?'環線':'往返'}`:'尚未開通';
+  $('route-instruction').textContent=l.breaks?.length?'從斷點拖到另一個斷點，可途經新站重接；其他線段保留。':l.stops.length?'端點可延伸；從中間站或線段拖到新站可插站，保留兩側路線。分支可另選一條線，從共站接出。':'從任意一站拖曳到另一站，建立路線。';
   $('train-count').textContent=l.trains.length;
   $('carriage-count').textContent=l.trains.reduce((n,t)=>n+Math.max(0,Math.round((t.capacity-6)/6)),0);
   $('spare-trains').textContent=state.bugMode?'∞':state.depot.trains;$('spare-carriages').textContent=state.bugMode?'∞':state.depot.carriages;
@@ -236,7 +270,7 @@ function updateUI(){
   $('planned-growth-note').textContent=`規劃新站 ${generatedStationCount(state)} / 50 · ${state.plannedGrowth?'城市目錄用完後新增，手動／自動皆最多 50 站。':'已關閉，既有車站保留；城市目錄照常開放。'}`;
   const used=planning?0:tunnelsUsed(state);$('spare-tunnels').textContent=state.bugMode?'∞':Math.max(0,state.depot.tunnels-used);$('tunnel-note').textContent=planning?'列車、車廂與跨河資源不限；不列入評分。':`隧道已用 ${used} / ${state.bugMode?'∞':state.depot.tunnels}，${state.bugMode?'跨河不受限制':used>state.depot.tunnels?'縮短或撤線可釋出隧道':'跨河時自動配置'}。`;
   $('trim').disabled=$('clear').disabled=!editable||!l.stops.length||blocked();$('redraw').disabled=!editable||blocked();
-  $('add-train').disabled=!editable||blocked()||!l.stops.length||(!state.bugMode&&!state.depot.trains);$('add-carriage').disabled=!editable||blocked()||!l.trains.length||(!state.bugMode&&!state.depot.carriages);
+  $('add-train').disabled=!editable||blocked()||!lineSections(l).length||(!state.bugMode&&!state.depot.trains);$('add-carriage').disabled=!editable||blocked()||!l.trains.length||(!state.bugMode&&!state.depot.carriages);
   $('pause').setAttribute('aria-pressed',String(paused));$('pause').setAttribute('aria-label',paused?'繼續遊戲':'暫停遊戲');$('pause').textContent=paused?'▶':'Ⅱ';$('speed').textContent=`${speed}×`;
   $('pause-label').hidden=!paused||blocked();
   $('pause').disabled=building;$('speed').disabled=building;
@@ -320,18 +354,19 @@ function draw(now){
   ctx.lineJoin='round';ctx.lineCap='round';
   if(!state.city){path(RIVER);ctx.strokeStyle='#bdd9e2';ctx.lineWidth=62;ctx.stroke();path(RIVER);ctx.strokeStyle='#d1e5ec';ctx.lineWidth=56;ctx.stroke();ctx.save();ctx.translate(590,520);ctx.rotate(-1.28);ctx.fillStyle='#79a9ba';ctx.font='12px "Microsoft JhengHei",sans-serif';ctx.fillText(t('河 港 川'),0,0);ctx.restore();ctx.font='11px "Microsoft JhengHei",sans-serif';ctx.fillStyle='#b5c4c8';ctx.fillText(t('舊 城 區'),155,160);ctx.fillText(t('河 岸 新 城'),780,480);ctx.fillText(t('北 港'),760,110);}
   const lineSize=display.values.line/100/(state.city?Math.max(1,scale):1);
-  for(const l of state.lines){if(l.stops.length<2)continue;path(routePoints(state,l.stops));ctx.strokeStyle='#f5f7f6';ctx.lineWidth=(l.id===selected?9:7)*lineSize;ctx.stroke();path(routePoints(state,l.stops));ctx.strokeStyle=l.color;ctx.globalAlpha=l.id===selected?1:.66;ctx.lineWidth=(l.id===selected?7:5)*lineSize;ctx.stroke();ctx.globalAlpha=1;}
-  if(draft?.length>=2){path(routePoints(state,draft));ctx.setLineDash([10,7].map(n=>n/(state.city?Math.max(1,scale):1)));ctx.strokeStyle=line().color;ctx.lineWidth=7*lineSize;ctx.globalAlpha=.7;ctx.stroke();ctx.globalAlpha=1;ctx.setLineDash([]);}
-  const served=new Set(state.lines.flatMap(l=>l.stops)),size=stationScale(scale)*display.values.station/100;
+  for(const l of state.lines)for(const section of lineSections(l)){const points=routePoints(state,section);path(points);ctx.strokeStyle='#f5f7f6';ctx.lineWidth=(l.id===selected?9:7)*lineSize;ctx.stroke();path(points);ctx.strokeStyle=l.color;ctx.globalAlpha=l.id===selected?1:.66;ctx.lineWidth=(l.id===selected?7:5)*lineSize;ctx.stroke();ctx.globalAlpha=1;}
+  if(draft?.length>=2){ctx.setLineDash([10,7].map(n=>n/(state.city?Math.max(1,scale):1)));ctx.strokeStyle=line().color;ctx.lineWidth=7*lineSize;ctx.globalAlpha=.7;for(const section of lineSections({stops:draft,breaks:redrawing||repair?[]:line().breaks})){path(routePoints(state,section));ctx.stroke();}ctx.globalAlpha=1;ctx.setLineDash([]);}
+  const served=connectedStationIds(state),size=stationScale(scale)*display.values.station/100;
   if(state.planning)for(const stop of state.stations.filter(stop=>served.has(stop.id))){ctx.beginPath();ctx.arc(stop.x,stop.y,28,0,Math.PI*2);ctx.fillStyle='#347ab60c';ctx.fill();ctx.strokeStyle='#347ab62b';ctx.lineWidth=.7/scale;ctx.stroke();}
+  const servingLines=state.lines.map(l=>new Set(lineSections(l).flat()));
   for(const s of state.stations){
     const r=Math.max(13,9/scale)*size;
     if(!served.has(s.id)){
       ctx.globalAlpha=reducedMotion?.9:.35+.65*(.5+.5*Math.sin(now/230));ctx.beginPath();ctx.arc(s.x,s.y,r+8*size,0,Math.PI*2);ctx.strokeStyle='#e34036';ctx.lineWidth=3*size/Math.min(1,scale);ctx.stroke();ctx.beginPath();ctx.arc(s.x+r+3*size,s.y-r-3*size,3.5*size/Math.min(1,scale),0,Math.PI*2);ctx.fillStyle='#e34036';ctx.fill();ctx.globalAlpha=1;
     }
     if(s.queue.length>6){ctx.beginPath();ctx.arc(s.x,s.y,24*size,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.min(1,s.crowd/26));ctx.strokeStyle='#d15b4d';ctx.lineWidth=4*size;ctx.stroke();ctx.beginPath();ctx.arc(s.x,s.y,24*size,0,Math.PI*2);ctx.strokeStyle='#d15b4d22';ctx.lineWidth=4*size;ctx.stroke();}
-    if(hover===s.id||(draft&&(insertion?draft[insertion.at-1]:draft.at(-1))===s.id)){ctx.beginPath();ctx.arc(s.x,s.y,21*size,0,Math.PI*2);ctx.fillStyle=line().color+'18';ctx.fill();}
-    const serving=state.lines.filter(l=>l.stops.includes(s.id)).length;
+    if(hover===s.id||focusedStationId===s.id||(draft&&(insertion?draft[insertion.at-1]:draft.at(-1))===s.id)){ctx.beginPath();ctx.arc(s.x,s.y,21*size,0,Math.PI*2);ctx.fillStyle=line().color+'18';ctx.fill();}
+    const serving=servingLines.filter(stops=>stops.has(s.id)).length;
     if(serving>1){ctx.beginPath();ctx.arc(s.x,s.y,19*size,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.strokeStyle='#bcc9cf';ctx.lineWidth=2*size;ctx.stroke();}
     shape(s.shape,s.x,s.y,r,'#fff',s.queue.length>6?'#bd534b':'#304b5d',3*size);
     const q=s.queue.slice(0,16),left=s.x+r+11*size,marker=Math.max(3.3,2/scale)*size/stationScale(),pitch=marker*3.3;

@@ -1,6 +1,6 @@
 {
-  "version": "3.1.0",
+  "version": "3.2.0",
   "edition": "public",
   "offline": true,
-  "sourceCommit": "cb6f778fa888eab01e0b1d4a2d8f0a99cbe24ed0"
+  "sourceCommit": "76d875b9aba94a29c3ba7749d1c9a5b868557a44"
 }

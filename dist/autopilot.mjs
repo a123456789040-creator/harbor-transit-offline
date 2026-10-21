@@ -3,6 +3,7 @@ import {manageReferenceNetwork} from './auto-network.mjs';
 const length=(s,ids)=>{const p=routePoints(s,ids);return p.slice(1).reduce((n,v,i)=>n+Math.hypot(v.x-p[i].x,v.y-p[i].y),0);};
 export function autoManage(s){
   if(s.gameOver||s.won||s.planning)return;
+  for(const line of s.lines)if(line.breaks?.length)setRoute(s,line.id,line.stops);
   if(s.upgrade){const goal=s.city?.goal;chooseUpgrade(s,s.autoNetwork?.needsTunnel?'tunnel':(s.autoNetwork?.needsLine||goal&&s.unlocked<goal.lines)&&s.unlocked<s.lines.length?'line':s.depot.tunnels-tunnelsUsed(s)<2?'tunnel':'carriage');}
   if(!manageReferenceNetwork(s)){
   let connected=new Set(s.lines.flatMap(l=>l.stops));

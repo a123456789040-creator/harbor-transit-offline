@@ -1,4 +1,4 @@
-import {setRoute} from './core.mjs';
+import {setRoute,hasSegment,lineSections,connectedStationIds} from './core.mjs';
 
 const MAX_FEEDER_STOPS=8;
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
@@ -32,13 +32,13 @@ export function configureAutoNetwork(s,network){
 function components(s,onlyReference=false){
   const parent=new Map(s.stations.map(stop=>[stop.id,stop.id]));
   const root=id=>{while(parent.get(id)!==id){parent.set(id,parent.get(parent.get(id)));id=parent.get(id);}return id;};
-  for(const line of s.lines)if(!onlyReference||line.autoPattern)for(let i=1;i<line.stops.length;i++){const a=root(line.stops[i-1]),b=root(line.stops[i]);parent.set(a,b);}
+  for(const line of s.lines)if(!onlyReference||line.autoPattern)for(let i=1;i<line.stops.length;i++){if(!hasSegment(line,i))continue;const a=root(line.stops[i-1]),b=root(line.stops[i]);parent.set(a,b);}
   return root;
 }
 export function manageReferenceNetwork(s){
   const auto=s.autoNetwork;if(!auto)return false;
   if(s.bugMode)s.unlocked=s.lines.length;
-  const key=()=>[s.stations.length,s.unlocked,s.bugMode,s.depot.trains,s.depot.tunnels,s.lines.map(line=>line.stops.join(',')).join(';')].join(':');
+  const key=()=>[s.stations.length,s.unlocked,s.bugMode,s.depot.trains,s.depot.tunnels,s.lines.map(line=>line.stops.join(',')+'/'+(line.breaks||[]).join(',')).join(';')].join(':');
   if(key()===auto.lastKey)return true;
   auto.needsLine=false;auto.needsTunnel=false;
   const apply=(id,stops)=>{const result=setRoute(s,id,stops);if(!result.ok&&result.message.includes('隧道不足'))auto.needsTunnel=true;return result.ok;};
@@ -48,9 +48,9 @@ export function manageReferenceNetwork(s){
   const assigned=new Set();
   for(const line of s.lines.filter(line=>line.autoPattern)){
     const plan=plans.find(plan=>plan.pattern.id===line.autoPattern);if(!plan)continue;
-    assigned.add(plan.pattern.id);if(!same(line.stops,plan.stops))apply(line.id,plan.stops);
+    assigned.add(plan.pattern.id);if(!same(line.stops,plan.stops)||line.breaks?.length)apply(line.id,plan.stops);
   }
-  let referenceStops=new Set(s.lines.filter(line=>line.autoPattern).flatMap(line=>line.stops));
+  let referenceStops=new Set(s.lines.filter(line=>line.autoPattern).flatMap(line=>lineSections(line).flat()));
   const referenceRoot=components(s,true);
   for(const line of s.lines.filter(line=>line.autoFeeder&&line.stops.length))if(line.stops.every(id=>referenceStops.has(id)&&referenceRoot(id)===referenceRoot(line.stops[0])))setRoute(s,line.id,[]);
   while(true){
@@ -70,7 +70,7 @@ export function manageReferenceNetwork(s){
   const updatedRoot=components(s,true);
   for(const line of s.lines.filter(line=>line.autoFeeder&&line.stops.length))if(line.stops.every(id=>referenceStops.has(id)&&updatedRoot(id)===updatedRoot(line.stops[0])))setRoute(s,line.id,[]);
   // Isolated random openings need short temporary feeders until their real corridor or interchange appears.
-  let connected=new Set(s.lines.flatMap(line=>line.stops));
+  let connected=connectedStationIds(s);
   if(!s.bugMode&&connected.size<s.stations.length&&!s.lines.slice(0,s.unlocked).some(line=>!line.stops.length)){
     const donor=s.lines.filter(line=>line.autoPattern&&line.stops.length<=4).sort((a,b)=>a.stops.length-b.stops.length||a.id-b.id)[0];
     if(donor){donor.autoPattern=null;donor.autoFeeder=true;donor.referenceIds=[];donor.name=`暫時接駁 ${donor.id+1}`;donor.color='#698593';}

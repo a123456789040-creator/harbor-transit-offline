@@ -18,7 +18,7 @@ export function createState(seed = 20261017,options = {}) {
   const s = {stations:[], lines:COLORS.map((color,id) => ({id,color,name:['朱橙線','湛藍線','琥珀線','紫藤線','翠綠線'][id],stops:[],trains:[]})),
     unlocked:3, depot:{trains:3,carriages:1,tunnels:3}, time:0, week:1, delivered:0, gameOver:false, upgrade:false, bugMode:false,
     notice:'選擇路線，拖過車站，開始運送乘客。', rng:(Number.isFinite(seed)?seed:20261017)>>>0, nextGrowth:city?.growth||18, nextWeek:70,
-    city:city||null,mode:options.mode==='endless'?'endless':city?'campaign':'classic',won:false,autoMode:false,plannedGrowth:true,world:{...(city?.world||{width:W,height:H})},expansions:[]};
+    city:city||null,mode:options.mode==='endless'?'endless':city?'campaign':'classic',won:false,autoMode:false,plannedGrowth:true,stationGeneration:options.stationGeneration==='random'?'random':'ordered',world:{...(city?.world||{width:W,height:H})},expansions:[]};
   if(city&&options.lines?.length){
     s.referenceLineCount=options.lines.length;
     s.lines=Array.from({length:options.lines.length*(planning?1:2)},(_,id)=>{const line=options.lines[id%options.lines.length],name=line.operator?`${line.operator} ${line.name}`:line.name;return {id,name:name+(id>=options.lines.length?' 2':''),color:line.color,referenceId:line.id,stops:[],trains:[]};});s.unlocked=s.lines.length;
@@ -67,7 +67,7 @@ export function launchPlanning(s,deadline=false){
   return result(true,s.notice);
 }
 export function missionProgress(s){
-  const connected=new Set(s.lines.flatMap(l=>l.stops)).size,lines=s.lines.filter(l=>l.stops.length>1).length,goal=s.mode==='campaign'?s.city?.goal:null;
+  const connected=connectedStationIds(s).size,lines=s.lines.filter(l=>lineSections(l).length).length,goal=s.mode==='campaign'?s.city?.goal:null;
   return {delivered:s.delivered,connected,lines,goal,complete:!!goal&&s.delivered>=goal.delivered&&connected>=goal.connected&&lines>=goal.lines};
 }
 function pairPoints(a, b) {
@@ -105,10 +105,10 @@ function geographicCrossings(s,a,b){
   const count=Math.ceil(coast.length/2)+rivers.length;cache.set(key,count);return count;
 }
 export function tunnelsUsed(s) {
-  if(s.city){let total=0;const edges=new Set();for(const line of s.lines)for(let i=1;i<line.stops.length;i++){const a=line.stops[i-1],b=line.stops[i],key=[a,b].sort((x,y)=>x-y).join(':');if(!edges.has(key)){edges.add(key);total+=geographicCrossings(s,station(s,a),station(s,b));}}return total;}
+  if(s.city){let total=0;const edges=new Set();for(const line of s.lines)for(let i=1;i<line.stops.length;i++){if(!hasSegment(line,i))continue;const a=line.stops[i-1],b=line.stops[i],key=[a,b].sort((x,y)=>x-y).join(':');if(!edges.has(key)){edges.add(key);total+=geographicCrossings(s,station(s,a),station(s,b));}}return total;}
   const hits=[];
-  for (const line of s.lines) {
-    const points=routePoints(s,line.stops);
+  for(const line of s.lines)for(const section of lineSections(line)){
+    const points=routePoints(s,section);
     for (let i=1;i<points.length;i++) for (let j=1;j<RIVER.length;j++) {
       const hit=crossing(points[i-1],points[i],RIVER[j-1],RIVER[j]);
       if (hit && !hits.some(p=>distance(p,hit)<.01)) hits.push(hit);
@@ -118,13 +118,30 @@ export function tunnelsUsed(s) {
 }
 const isLoop = line => line.stops.length>2 && line.stops[0]===line.stops.at(-1);
 const nodes = line => isLoop(line) ? line.stops.slice(0,-1) : line.stops;
+const edgeKey=(a,b)=>a<b?`${a}:${b}`:`${b}:${a}`;
+export const hasSegment=(line,index)=>index>0&&index<line.stops.length&&!line.breaks?.includes(edgeKey(line.stops[index-1],line.stops[index]));
+export function lineSections(line){
+  if(!line.breaks?.length)return line.stops.length>1?[line.stops]:[];
+  const sections=[];let section=[];
+  for(let i=0;i<line.stops.length;i++){
+    if(i&&!hasSegment(line,i)){if(section.length>1)sections.push(section);section=[];}
+    section.push(line.stops[i]);
+  }
+  if(section.length>1)sections.push(section);
+  if(sections.length>1&&sections[0][0]===sections.at(-1).at(-1))sections[0]=[...sections.pop().slice(0,-1),...sections[0]];
+  return sections;
+}
+export function connectedStationIds(s){return new Set(s.lines.flatMap(line=>lineSections(line).flat()));}
+const operatingIndexes=line=>{const ids=nodes(line),active=new Set(lineSections(line).flat());return ids.map((id,i)=>active.has(id)?i:-1).filter(i=>i>=0);};
 function nextIndex(line, from, train) {
-  const count=nodes(line).length;
-  if (isLoop(line)) return (from+train.dir+count)%count;
-  if (from+train.dir<0 || from+train.dir>=count) train.dir*=-1;
-  return from+train.dir;
+  const ids=nodes(line),count=ids.length;
+  const next=()=>isLoop(line)?(from+train.dir+count)%count:from+train.dir;
+  let to=next();
+  if(to<0||to>=count||line.breaks?.includes(edgeKey(ids[from],ids[to]))){train.dir*=-1;to=next();}
+  return to;
 }
 function resetTrain(line, train, index=0) {
+  const available=operatingIndexes(line);if(!available.includes(index))index=available.reduce((a,b)=>Math.abs(a-index)<=Math.abs(b-index)?a:b);
   train.from=index; train.to=nextIndex(line,index,train); train.progress=0; train.dwell=DWELL; train.serviced=false;
 }
 function edgePoints(s,line,train) {
@@ -144,7 +161,7 @@ export function trainPosition(s,line,train) {
     travel-=length;
   }
 }
-export function setRoute(s,lineId,stops) {
+export function setRoute(s,lineId,stops,options={}) {
   const line=s.lines.find(v=>v.id===lineId);
   if(s.planning&&s.planning.phase!=='building')return result(false,'模擬開始後，站點與路線已鎖定。');
   if (s.gameOver) return result(false,'本局已結束，請重新開始。');
@@ -153,11 +170,14 @@ export function setRoute(s,lineId,stops) {
   if (stops.length===1) return result(false,'至少連接兩個車站。');
   const loop=stops.length>2 && stops[0]===stops.at(-1), unique=loop?stops.slice(0,-1):stops;
   if (new Set(unique).size!==unique.length || (loop && unique.length<3)) return result(false,'車站不能重複；環線需至少三站。');
-  const proposed={...s,lines:s.lines.map(v=>v===line?{...line,stops}:v)};
+  const edges=stops.slice(1).map((id,i)=>edgeKey(stops[i],id)),breaks=options.breaks??[];
+  if(!Array.isArray(breaks)||breaks.some(key=>!edges.includes(key))||new Set(breaks).size!==breaks.length)return result(false,'線段設定無效。');
+  const proposedLine={...line,stops,breaks},operating=lineSections(proposedLine).length>0;
+  const proposed={...s,lines:s.lines.map(v=>v===line?proposedLine:v)};
   const used=s.bugMode?0:tunnelsUsed(proposed);
   if (!s.bugMode && used>s.depot.tunnels && used>tunnelsUsed(s)) return result(false,'跨河隧道不足，請調整路線或等待每週補給。');
-  if (!s.bugMode && stops.length && !line.trains.length && !s.depot.trains) return result(false,'沒有可用列車，請先刪除閒置路線回收列車。');
-  if (stops.length===line.stops.length && stops.every((id,i)=>id===line.stops[i])) return result(true,'路線沒有變更。');
+  if (!s.bugMode && operating && !line.trains.length && !s.depot.trains) return result(false,'沒有可用列車，請先刪除閒置路線回收列車。');
+  if (stops.length===line.stops.length && stops.every((id,i)=>id===line.stops[i])&&JSON.stringify(breaks)===JSON.stringify(line.breaks||[])) return result(true,'路線沒有變更。');
   for (const train of line.trains) {
     const position=trainPosition(s,line,train);
     const nearest=line.stops.map(id=>station(s,id)).reduce((a,b)=>distance(a,position)<distance(b,position)?a:b);
@@ -167,9 +187,9 @@ export function setRoute(s,lineId,stops) {
     }
     train.passengers=[];
   }
-  line.stops=[...stops];
+  line.stops=[...stops];line.breaks=[...breaks];
   if(s.planning)s.planning.revision++;
-  if (!stops.length) {
+  if (!operating) {
     s.depot.trains+=line.trains.filter(t=>!t.bugTrain).length;
     s.depot.carriages+=line.trains.reduce((n,t)=>n+(t.capacity-6)/6-(t.bugCarriages||0),0);
     line.trains=[];
@@ -181,13 +201,23 @@ export function setRoute(s,lineId,stops) {
   }
   return result(true,s.notice);
 }
+export function removeSegment(s,lineId,index){
+  const line=s.lines.find(line=>line.id===lineId);
+  if(s.planning)return result(false,'請在一般關卡或無盡模式移除線段。');
+  if(!line||!Number.isInteger(index)||!hasSegment(line,index))return result(false,'請用中鍵點選站與站之間的線段。');
+  const response=setRoute(s,lineId,line.stops,{breaks:[...(line.breaks||[]),edgeKey(line.stops[index-1],line.stops[index])]});
+  if(response.ok){s.notice='已移除這一段線，其他線段保留；可從斷點重新拉線。';response.message=s.notice;}
+  return response;
+}
 export function addTrain(s,lineId) {
   if(s.planning&&s.planning.phase!=='building')return result(false,'模擬開始後，車輛配置已鎖定。');
   const line=s.lines.find(v=>v.id===lineId);
-  if (s.gameOver || !line || line.id>=s.unlocked || line.stops.length<2) return result(false,'請先建立一條路線。');
+  if (s.gameOver || !line || line.id>=s.unlocked || !lineSections(line).length) return result(false,'請先建立一條路線。');
   if (!s.bugMode && s.depot.trains<1) return result(false,'沒有可用列車。');
   const train={passengers:[],capacity:6,dir:line.trains.length%2?-1:1,bugTrain:s.bugMode};
-  resetTrain(line,train,Math.floor(nodes(line).length/2));
+  let start=Math.floor(nodes(line).length/2);
+  if(line.breaks?.length){const ids=nodes(line),section=lineSections(line).sort((a,b)=>line.trains.filter(t=>a.includes(ids[t.from])).length-line.trains.filter(t=>b.includes(ids[t.from])).length)[0];start=ids.indexOf(section[Math.floor((section.length-1)/2)]);}
+  resetTrain(line,train,start);
   line.trains.push(train);if(!s.bugMode)s.depot.trains--;
   s.notice=`${line.name}增加一輛列車。`;
   return result(true,s.notice);
@@ -218,9 +248,10 @@ function graph(s) {
   const edges=new Map(s.stations.map(v=>[v.id,new Map()]));
   const add=(a,b,cost)=>edges.get(a).set(b,Math.min(edges.get(a).get(b)??Infinity,cost));
   for (const line of s.lines) for (let i=1;i<line.stops.length;i++) {
+    if(!hasSegment(line,i))continue;
     const a=line.stops[i-1],b=line.stops[i],cost=lengthOf(routePoints(s,[a,b]));
-    if (!isLoop(line) || line.trains.some(t=>t.dir>0)) add(a,b,cost);
-    if (!isLoop(line) || line.trains.some(t=>t.dir<0)) add(b,a,cost);
+    if (!isLoop(line) || line.breaks?.length || line.trains.some(t=>t.dir>0)) add(a,b,cost);
+    if (!isLoop(line) || line.breaks?.length || line.trains.some(t=>t.dir<0)) add(b,a,cost);
   }
   return edges;
 }
@@ -283,7 +314,10 @@ function riverX(y) {
 }
 export function generatedStationCount(s){return s.stations.filter(stop=>stop.generated).length;}
 function grow(s) {
-  if(s.city&&s.stations.length<s.city.stations.length){const p=s.city.stations[s.stations.length],shape=SHAPES[Math.floor(random(s)*5)];s.stations.push({...makeStation(s,p.x,p.y,shape),name:p.name,catalogId:p.id,real:!s.city.fictional&&!p.planned,planned:!!p.planned,artificial:!!s.city.fictional,source:p.source||p.wikidata});s.notice=`新站開放：${p.name}`;return;}
+  if(s.city){
+    const opened=new Set(s.stations.map(stop=>stop.catalogId)),remaining=s.city.stations.filter(stop=>!opened.has(stop.id));
+    if(remaining.length){const p=remaining[s.stationGeneration==='random'?Math.floor(random(s)*remaining.length):0],shape=SHAPES[Math.floor(random(s)*5)];s.stations.push({...makeStation(s,p.x,p.y,shape),name:p.name,catalogId:p.id,real:!s.city.fictional&&!p.planned,planned:!!p.planned,artificial:!!s.city.fictional,source:p.source||p.wikidata});s.notice=`新站開放：${p.name}`;return;}
+  }
   if(s.mode==='campaign'&&s.city)return;
   if(s.mode==='endless'){
     const planned=generatedStationCount(s);

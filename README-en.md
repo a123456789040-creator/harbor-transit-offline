@@ -10,6 +10,9 @@ Choose **English** in the main menu's **Language** selector. Your choice is reme
 
 - Hong Kong, Taipei, New York, Tokyo, Osaka–Kyoto, and a large original canal city.
 - Draw routes between stations, assign trains and carriages, and connect transfers. Unconnected stations flash red.
+- Choose **Catalog order** or **Random real stations** under **Station generation** before starting. Random openings keep real station names and positions, without repeating stations.
+- **Unconnected stations** shows the current count beside its button; click to center the map on each waiting station. Connecting or removing track updates the count.
+- In campaign and endless modes, middle-click a segment between stations to remove only that segment. Other track and the existing fleet remain; trains reverse within each section. Drag from one end of the gap to the other, optionally through new stations, to repair it. Added trains go to sections with fewer trains first. Automatic mode may rebuild deleted segments. Middle-click removal requires a mouse.
 - Automatic mode builds routes using real station patterns where available. BUG mode supplies unlimited trains, carriages, and tunnels.
 - Normal city challenges unlock endless play after completion. The New Stations switch, beside BUG mode, enables up to 50 extra stations after the real/planned catalog; disabling it preserves existing stations and routes.
 - Network Planning gives you five minutes to build stations and routes, then runs the network for ten seconds before the next planning round. Progress is preserved between rounds.
