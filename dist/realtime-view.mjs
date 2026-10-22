@@ -1,4 +1,4 @@
-import {startI18n} from './i18n.mjs';
+import {startI18n,t} from './i18n.mjs';
 startI18n();
 import {HISTORY_CITIES,loadHistoryCity} from './history-cities.mjs';
 import {paintTerrain} from './terrain.mjs';
@@ -8,6 +8,7 @@ import {mountPinchZoom} from './touch-map.mjs';
 import {REALTIME_ZONES,cityTime,createTimetable,frequencyFrame,frequencyDepartures,sampleTrain,parseHongKong,parseTaipei,freshTimestamp} from './realtime-model.mjs';
 import {taipeiFrequencyPatterns} from './realtime-taipei.mjs';
 import {createLivePositions} from './realtime-positions.mjs';
+import {createPlaybackClock,cityDateTime,cityDateTimeEpoch} from './realtime-clock.mjs';
 import {HONGKONG_LIVE,TAIPEI_LIVE,TAIPEI_TRAVEL_TIMES,TAIPEI_PUBLIC_SERVICE_FACTS} from './realtime-hk-taipei-data.mjs';
 
 const $=id=>document.getElementById(id),query=new URLSearchParams(location.search),requested=query.get('city'),cityId=HISTORY_CITIES.some(c=>c.id===requested)?requested:'taipei';
@@ -17,9 +18,9 @@ if(['newyork','tokyo','kansai'].includes(cityId))try{const response=await fetch(
 const frequency=cityId==='taipei'?taipeiFrequencyPatterns(model):[],livePositions=createLivePositions(model,data),covered=new Set(timetable?.lines||frequency.map(p=>p.lineId));
 if(cityId==='hongkong')for(const id of HONGKONG_LIVE.coverage)covered.add(id);
 const display=mountDisplaySettings($('display-settings')),canvas=$('realtime-map'),ctx=canvas.getContext('2d'),hasRelay=false,canRefresh=false;
-let started=false,zoom=1,panX=0,panY=0,transform={scale:1,x:0,y:0},drag=null,hovered=null,selected=null,shown=30,selectedLine='',trains=[],packet=null,arrivals=[],events=[],pending=false,lastAttempt=0,feedError='',expired=false,testNow=null,background=null,previousSecond=-1;
-let selectedStation='',boardRows=[],following=false,followed=null,drawnTrains=[];
-const now=()=>testNow??Date.now(),name=id=>stationById.get(id)?.name||id||'',lineName=id=>lineById.get(id)?.name||id||'',node=(tag,text)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;return el;};
+let started=false,zoom=1,panX=0,panY=0,transform={scale:1,x:0,y:0},drag=null,hovered=null,selected=null,shown=30,selectedLine='',trains=[],packet=null,arrivals=[],events=[],pending=false,lastAttempt=0,feedError='',expired=false,testNow=null,background=null;
+let selectedStation='',boardRows=[],following=false,followed=null,drawnTrains=[],lastFrameUpdate=-Infinity,updates=0;
+const playback=createPlaybackClock({wallNow:()=>testNow??Date.now()}),now=playback.now,name=id=>stationById.get(id)?.name||id||'',lineName=id=>lineById.get(id)?.name||id||'',node=(tag,text)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;return el;};
 const quality={timetable:'官方班表・站間推估','published-timetable':'官方班表・站間推估','published-station-departures':'官方逐站發車・到達時刻未全公布','terminal-departures-estimated-offsets':'官方起站時刻・中途推估','published-headway-model':'官方班距模型・示意相位','frequency-estimate':'班距推估・示意相位','live-entry-estimate':'官方進站事件・離站後推估','station-event':'最近進站事件','live-station-status':'官方列車狀態・站間位置示意','arrival-illustration':'官方到站預測・動畫示意'};
 const coverage={
  taipei:'台北捷運 BR／R／G／O／BL 與兩條支線：官方站間秒數及班距模型。區網版另顯示近期進站事件，這不是完整車隊；班距模型不含國定假日調整、區間加班車。環狀線、機捷及輕軌目前沒有完整可用逐班班表，保留地圖。',
@@ -57,7 +58,7 @@ if(['tokyo','kansai'].includes(cityId)){
 const anchors=HONGKONG_LIVE.coverage.map(lineId=>{const list=HONGKONG_LIVE.stations.filter(s=>s.lineId===lineId);return list[Math.floor(list.length/2)];});
 async function fetchJson(url){const response=await fetch(url,{signal:AbortSignal.timeout(10000),cache:'no-store'});if(!response.ok)throw new Error('官方來源暫時無法使用');return response.json();}
 async function refresh(){
- if(!started||pending||!canRefresh)return;pending=true;lastAttempt=Date.now();$('live-refresh').disabled=true;
+ if(!started||pending||!canRefresh||!playback.live)return;pending=true;lastAttempt=Date.now();$('live-refresh').disabled=true;
  try{
   if(cityId==='hongkong'){
    const results=await Promise.allSettled(anchors.map(async anchor=>{const url=new URL(HONGKONG_LIVE.endpoint);url.search=new URLSearchParams({line:anchor.lineId,sta:anchor.code,lang:'TC'});return parseHongKong(await fetchJson(url),anchor,now());}));
@@ -69,7 +70,7 @@ async function refresh(){
    if(cityId==='taipei')events=parseTaipei(packet.events,model,now());feedError=packet.unavailable?.length?`${packet.unavailable.length} 組來源暫缺`:'';
   }
  }catch(error){feedError=error.message;}
- finally{pending=false;$('live-refresh').disabled=!canRefresh;update();}
+ finally{pending=false;update();}
 }
 function describe(t){
  const target=name(t.toId),origin=name(t.fromId);
@@ -79,19 +80,21 @@ function describe(t){
  return t.atStation?`${target} · ${t.kind==='live-entry-estimate'?'進站後推估停靠':'班表停站'}`:`${origin} → ${target}${Number.isFinite(t.nextIn)?` · 約 ${Math.ceil(t.nextIn)} 秒`:''}`;
 }
 function update(){
+ updates++;
  const epoch=now(),clock=cityTime(epoch,timeZone);$('realtime-clock').textContent=clock.clock;$('realtime-date').textContent=clock.date;
  let frame=timetable?.frame(epoch);expired=!!frame?.expired;trains=started?(frame?.trains||frequencyFrame(model,frequency,epoch)):[];
  let live=false,status=cityId==='taipei'?'官方班距推估':'依官方時刻表推估',updated='';
  if(frame?.expiredServices)updated='部分班表已過有效期；對應服務已停止，其他有效班表繼續。';
- if(started&&cityId==='hongkong'){trains=livePositions.hongkong(arrivals,epoch);live=trains.length>0;status=live?'官方到站預測（參考站）':'目前沒有有效到站預測';updated=live?`來源時間 ${cityTime(Math.max(...arrivals.map(a=>a.timestamp)),timeZone).clock}`:feedError||'可能已收車、來源延遲或尚未連線。';}
- if(started&&cityId==='taipei'){
+ if(started&&playback.live&&cityId==='hongkong'){trains=livePositions.hongkong(arrivals,epoch);live=trains.length>0;status=live?'官方到站預測（參考站）':'目前沒有有效到站預測';updated=live?`來源時間 ${cityTime(Math.max(...arrivals.map(a=>a.timestamp)),timeZone).clock}`:feedError||'可能已收車、來源延遲或尚未連線。';}
+ if(started&&playback.live&&cityId==='taipei'){
   const current=livePositions.taipei(events,epoch);if(current.length){trains.push(...current);live=true;status='班距推估＋官方局部進站事件';updated=`最新進站記錄 ${cityTime(Math.max(...events.map(e=>e.timestamp)),timeZone).clock}`;}
  }
- if(started&&cityId==='newyork'){
+ if(started&&playback.live&&cityId==='newyork'){
   const fresh=(packet?.feeds||[]).filter(f=>freshTimestamp(f.timestamp*1000,epoch,60000));
   if(fresh.length){trains=livePositions.mta(packet,epoch);live=true;status='官方列車站點／運行狀態';updated=`${fresh.length} / 8 組來源 · ${cityTime(Math.max(...fresh.map(f=>f.timestamp*1000)),timeZone).clock}`;}
  }
  if(!live&&['taipei','newyork'].includes(cityId))updated=hasRelay?(feedError||'等待即時來源；目前使用班表／班距推估。'):'此入口使用已整理的班表／班距；區網版可接官方即時來源。';
+ if(!playback.live){updated='班表播放不使用當前即時資訊，也不代表歷史實際車況。';if(cityId==='hongkong')status='此城市沒有已收錄班表可供播放';}
  if(expired&&!live)status='班表已過有效期・停止班表推估';
  if(dataError)status=dataError;
  if(started&&cityId==='hongkong')status='離線版沒有到站預測';if(started&&cityId==='tokyo'&&!timetable?.lines.length)status='公開版未附東京業者班表';$('live-status').textContent=started?status:'開始前可調整外觀';$('live-badge').textContent=live?(cityId==='hongkong'?'官方到站預測':'官方即時資訊'):'班表／班距推估';$('live-badge').dataset.live=String(live);$('live-updated').textContent='離線版不連線更新；沒有 GPS 或當日延誤資訊。';
@@ -99,8 +102,28 @@ function update(){
  $('realtime-count').textContent=`${snapshot.stations.length} 個真實站點 · ${cityId==='hongkong'?'到站預測':live&&cityId==='taipei'?'推估列車＋局部事件':live?'官方列車':'推估列車'} ${trains.length} 筆`;
  $('realtime-coverage').textContent=`已收錄班次：${covered.size} / ${snapshot.lines.length} 條${['tokyo','kansai'].includes(cityId)?'物理軌道路線（直通車分段繪製）':'路線'}${selectedLine&&!covered.has(selectedLine)?'；所選路線無班次來源。':'。'}`;
  $('realtime-disclosure').textContent=live?(cityId==='hongkong'?'即時到站預測；抵站前 90 秒的動畫僅示意，並非列車定位。':cityId==='taipei'?'班距推估與局部進站事件並列，可能重疊；無逐車識別或 GPS，不將事件冒認為推估班次。':'官方站點／狀態；站間位置示意，無 GPS 座標。'):'依城市當地時間推估運行；未涵蓋臨時延誤或停駛。';
- renderTrains();renderBoard();renderFollow();
+ $('live-refresh').disabled=!canRefresh||!playback.live||pending;
+ if(!playback.live)$('realtime-disclosure').textContent='班表播放不使用當前即時資訊，也不代表歷史實際車況。';
+ renderTrains();renderBoard();renderFollow();renderPlayback();
 }
+function renderPlayback(){
+ const epoch=now(),p=cityTime(epoch,timeZone);$('playback-mode').textContent=playback.live?'城市現在':playback.paused?'班表播放・已暫停':`班表播放・${playback.speed}×`;$('playback-mode').dataset.live=String(playback.live);
+ $('playback-toggle').textContent=playback.paused?'播放':'暫停';$('playback-toggle').setAttribute('aria-pressed',String(playback.paused));
+ if(document.activeElement!==$('playback-datetime'))$('playback-datetime').value=cityDateTime(epoch,timeZone);
+ if(document.activeElement!==$('playback-range'))$('playback-range').value=String(Math.min(86340,Math.floor(p.seconds/60)*60));
+ $('playback-range').setAttribute('aria-valuetext',`${p.date} ${p.clock} · ${timeZone}`);$('playback-speed').value=String(playback.speed);
+ $('playback-note').textContent=`${timeZone} · 以城市當地時間選擇；班表播放不代表歷史實際車況。`;
+ for(const id of ['playback-toggle','playback-speed','playback-datetime','playback-range','playback-now'])$(id).disabled=!started;
+}
+function seekPlayback(value){
+ const epoch=cityDateTimeEpoch(value,timeZone);$('playback-datetime').setCustomValidity(epoch===null?t('此城市日期或時間無效。'):'');
+ if(epoch===null){$('playback-datetime').reportValidity();return;}
+ playback.seek(epoch);update();
+}
+$('playback-datetime').oninput=()=>$('playback-datetime').setCustomValidity('');$('playback-datetime').onchange=()=>seekPlayback($('playback-datetime').value);
+$('playback-range').oninput=()=>{const date=cityTime(now(),timeZone).date,seconds=Number($('playback-range').value);seekPlayback(`${date}T${String(Math.floor(seconds/3600)).padStart(2,'0')}:${String(Math.floor(seconds%3600/60)).padStart(2,'0')}:00`);};
+$('playback-toggle').onclick=()=>{playback.toggle();update();};$('playback-speed').onchange=()=>{playback.setSpeed(Number($('playback-speed').value));update();};
+$('playback-now').onclick=()=>{playback.reset();$('playback-datetime').setCustomValidity('');$('playback-datetime').value=cityDateTime(now(),timeZone);update();refresh();};
 function renderTrains(){
  const container=$('realtime-trains'),visible=trains.slice(0,shown);$('train-total').textContent=String(trains.length);$('show-more').hidden=trains.length<=shown;
  if(!trains.length){container.replaceChildren(node('p',started?(selectedLine&&!covered.has(selectedLine)?'此路線尚無可用班次來源。':'此時段沒有已涵蓋的班次，或官方來源暫缺。'):'開始後顯示此刻班次。'));return;}
@@ -153,8 +176,8 @@ fillStations();$('station-search').oninput=fillStations;$('realtime-station').on
 $('follow-toggle').onclick=()=>{following=!following;renderFollow();};$('follow-close').onclick=()=>{following=false;selected=null;followed=null;renderFollow();};
 function focusPoint(point){zoom=Math.max(zoom,3);const scale=Math.min(canvas.clientWidth/1100,(canvas.clientHeight-60)/700)*zoom;panX=(550-point.x)*scale;panY=(350-point.y)*scale;}
 function zoomAt(next,x,y){const previous=zoom,cx=canvas.clientWidth/2,cy=(canvas.clientHeight+60)/2;zoom=Math.max(.7,Math.min(16,next));panX=(panX+cx-x)*zoom/previous-cx+x;panY=(panY+cy-y)*zoom/previous-cy+y;}
-function draw(){
- const second=Math.floor(now()/1000);if(second!==previousSecond){previousSecond=second;update();}
+function draw(frameTime){
+ if(started&&frameTime-lastFrameUpdate>=250){lastFrameUpdate=frameTime;update();}
  drawnTrains=trains.map(t=>sampleTrain(t,now())).filter(Boolean);const tracked=followPosition();if(following&&tracked){focusPoint(tracked);if(!drawnTrains.some(t=>t.id===selected))drawnTrains.push(tracked);}
  const rect=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2),w=Math.round(rect.width*dpr),h=Math.round(rect.height*dpr),scale=Math.min(rect.width/1100,(rect.height-60)/700)*zoom;
  if(w&&h&&scale>0){
@@ -189,11 +212,11 @@ canvas.addEventListener('pointerdown',e=>{if(e.button!==0||pinch.active)return;d
 canvas.addEventListener('pointermove',e=>{if(drag){if(Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)>5)drag.moved=true;if(drag.moved){detachFollow();panX+=e.clientX-drag.x;panY+=e.clientY-drag.y;}drag.x=e.clientX;drag.y=e.clientY;}else inspect(e);});
 canvas.addEventListener('pointerup',e=>{if(drag&&!drag.moved&&!pinch.active)inspect(e,true);drag=null;});
 for(const event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,()=>{drag=null;});
-canvas.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();detachFollow();panX+=e.key==='ArrowLeft'?30:e.key==='ArrowRight'?-30:0;panY+=e.key==='ArrowUp'?30:e.key==='ArrowDown'?-30:0;}});
+canvas.addEventListener('keydown',e=>{if(e.code==='Space'&&started){e.preventDefault();playback.toggle();update();}if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();detachFollow();panX+=e.key==='ArrowLeft'?30:e.key==='ArrowRight'?-30:0;panY+=e.key==='ArrowUp'?30:e.key==='ArrowDown'?-30:0;}});
 const pinch=mountPinchZoom(canvas,{cancel:()=>{drag=null;detachFollow();},zoom:(ratio,from,to)=>{zoomAt(zoom*ratio,from.x,from.y);panX+=to.x-from.x;panY+=to.y-from.y;}});
 $('realtime-line').onchange=()=>{selectedLine=$('realtime-line').value;shown=30;selected=null;followed=null;following=false;update();};$('show-more').onclick=()=>{shown+=30;renderTrains();};$('live-refresh').onclick=refresh;
 $('realtime-start').onclick=()=>{started=true;display.lock();$('realtime-setup').close();update();refresh();canvas.focus();};$('realtime-setup').addEventListener('cancel',e=>e.preventDefault());
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){update();if(Date.now()-lastAttempt>30000)refresh();}});
-setInterval(()=>{if(started){update();if(Date.now()-lastAttempt>=30000)refresh();}},1000);
+setInterval(()=>{if(started&&Date.now()-lastAttempt>=30000)refresh();},1000);
 $('live-refresh').disabled=!canRefresh;update();$('realtime-setup').showModal();requestAnimationFrame(draw);
-if(query.has('test'))window.realtimeTransit={model,get cityId(){return cityId;},get trains(){return trains;},get drawnTrains(){return drawnTrains;},get boardRows(){return boardRows;},get following(){return following;},get selected(){return selected;},get display(){return display.values;},get view(){return {...transform,zoom};},get expired(){return expired;},setTime(value){testNow=value;update();},chooseStation,refresh,update};
+if(query.has('test'))window.realtimeTransit={model,get cityId(){return cityId;},get trains(){return trains;},get drawnTrains(){return drawnTrains;},get boardRows(){return boardRows;},get following(){return following;},get selected(){return selected;},get display(){return display.values;},get view(){return {...transform,zoom};},get expired(){return expired;},get playback(){return {epoch:now(),live:playback.live,paused:playback.paused,speed:playback.speed,updates};},setTime(value){testNow=value;update();},chooseStation,refresh,update};

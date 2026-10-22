@@ -1,10 +1,10 @@
 {
   "name": "harbor-transit-offline",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node tests/realtime-viewing.test.mjs && node tests/station-tools.test.mjs && node tests/i18n.test.mjs && node tests/planned-growth.test.mjs && node tests/offline.test.mjs"
+    "test": "node tests/realtime-clock.test.mjs && node tests/realtime-viewing.test.mjs && node tests/station-tools.test.mjs && node tests/i18n.test.mjs && node tests/planned-growth.test.mjs && node tests/offline.test.mjs"
   }
 }
