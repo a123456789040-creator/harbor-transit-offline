@@ -31,3 +31,5 @@ Original game code is MIT licensed. Maps, official data, and the Node.js runtime
 ## Source and build
 
 With Node.js 24 LTS installed, run `node server.mjs`; no `npm install` is required. Run `npm test` for checks. On Windows, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1` builds the portable ZIP. Building downloads and verifies the official Node runtime; playing the completed build does not need the internet.
+
+The offline viewer includes station search and a bidirectional departure board for the next 30 minutes (up to four departures per direction). Select a departure or train to follow the same service. Pan, use arrow keys, fit the map, or choose another station to unlock the camera; following can be resumed. Trains move smoothly along the existing tracks. Taipei services are illustrative headway estimates, without real vehicle numbers or daily delays.

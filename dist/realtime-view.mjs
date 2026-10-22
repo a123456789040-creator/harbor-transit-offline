@@ -5,7 +5,7 @@ import {paintTerrain} from './terrain.mjs';
 import {paintRailLines} from './rail-map.mjs';
 import {mountDisplaySettings} from './display-settings.mjs';
 import {mountPinchZoom} from './touch-map.mjs';
-import {REALTIME_ZONES,cityTime,createTimetable,frequencyFrame,parseHongKong,parseTaipei,freshTimestamp} from './realtime-model.mjs';
+import {REALTIME_ZONES,cityTime,createTimetable,frequencyFrame,frequencyDepartures,sampleTrain,parseHongKong,parseTaipei,freshTimestamp} from './realtime-model.mjs';
 import {taipeiFrequencyPatterns} from './realtime-taipei.mjs';
 import {createLivePositions} from './realtime-positions.mjs';
 import {HONGKONG_LIVE,TAIPEI_LIVE,TAIPEI_TRAVEL_TIMES,TAIPEI_PUBLIC_SERVICE_FACTS} from './realtime-hk-taipei-data.mjs';
@@ -18,6 +18,7 @@ const frequency=cityId==='taipei'?taipeiFrequencyPatterns(model):[],livePosition
 if(cityId==='hongkong')for(const id of HONGKONG_LIVE.coverage)covered.add(id);
 const display=mountDisplaySettings($('display-settings')),canvas=$('realtime-map'),ctx=canvas.getContext('2d'),hasRelay=false,canRefresh=false;
 let started=false,zoom=1,panX=0,panY=0,transform={scale:1,x:0,y:0},drag=null,hovered=null,selected=null,shown=30,selectedLine='',trains=[],packet=null,arrivals=[],events=[],pending=false,lastAttempt=0,feedError='',expired=false,testNow=null,background=null,previousSecond=-1;
+let selectedStation='',boardRows=[],following=false,followed=null,drawnTrains=[];
 const now=()=>testNow??Date.now(),name=id=>stationById.get(id)?.name||id||'',lineName=id=>lineById.get(id)?.name||id||'',node=(tag,text)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;return el;};
 const quality={timetable:'官方班表・站間推估','published-timetable':'官方班表・站間推估','published-station-departures':'官方逐站發車・到達時刻未全公布','terminal-departures-estimated-offsets':'官方起站時刻・中途推估','published-headway-model':'官方班距模型・示意相位','frequency-estimate':'班距推估・示意相位','live-entry-estimate':'官方進站事件・離站後推估','station-event':'最近進站事件','live-station-status':'官方列車狀態・站間位置示意','arrival-illustration':'官方到站預測・動畫示意'};
 const coverage={
@@ -84,7 +85,7 @@ function update(){
  if(frame?.expiredServices)updated='部分班表已過有效期；對應服務已停止，其他有效班表繼續。';
  if(started&&cityId==='hongkong'){trains=livePositions.hongkong(arrivals,epoch);live=trains.length>0;status=live?'官方到站預測（參考站）':'目前沒有有效到站預測';updated=live?`來源時間 ${cityTime(Math.max(...arrivals.map(a=>a.timestamp)),timeZone).clock}`:feedError||'可能已收車、來源延遲或尚未連線。';}
  if(started&&cityId==='taipei'){
-  const current=livePositions.taipei(events,epoch);if(current.length){trains=current;live=true;status='官方近期進站事件・局部車流';updated=`最新進站記錄 ${cityTime(Math.max(...events.map(e=>e.timestamp)),timeZone).clock}`;}
+  const current=livePositions.taipei(events,epoch);if(current.length){trains.push(...current);live=true;status='班距推估＋官方局部進站事件';updated=`最新進站記錄 ${cityTime(Math.max(...events.map(e=>e.timestamp)),timeZone).clock}`;}
  }
  if(started&&cityId==='newyork'){
   const fresh=(packet?.feeds||[]).filter(f=>freshTimestamp(f.timestamp*1000,epoch,60000));
@@ -95,10 +96,10 @@ function update(){
  if(dataError)status=dataError;
  if(started&&cityId==='hongkong')status='離線版沒有到站預測';if(started&&cityId==='tokyo'&&!timetable?.lines.length)status='公開版未附東京業者班表';$('live-status').textContent=started?status:'開始前可調整外觀';$('live-badge').textContent=live?(cityId==='hongkong'?'官方到站預測':'官方即時資訊'):'班表／班距推估';$('live-badge').dataset.live=String(live);$('live-updated').textContent='離線版不連線更新；沒有 GPS 或當日延誤資訊。';
  if(selectedLine)trains=trains.filter(t=>t.lineId===selectedLine||t.lineIds?.includes(selectedLine));
- $('realtime-count').textContent=`${snapshot.stations.length} 個真實站點 · ${cityId==='hongkong'?'到站預測':live&&cityId==='taipei'?'進站事件推估':live?'官方列車':'推估列車'} ${trains.length} 筆`;
+ $('realtime-count').textContent=`${snapshot.stations.length} 個真實站點 · ${cityId==='hongkong'?'到站預測':live&&cityId==='taipei'?'推估列車＋局部事件':live?'官方列車':'推估列車'} ${trains.length} 筆`;
  $('realtime-coverage').textContent=`已收錄班次：${covered.size} / ${snapshot.lines.length} 條${['tokyo','kansai'].includes(cityId)?'物理軌道路線（直通車分段繪製）':'路線'}${selectedLine&&!covered.has(selectedLine)?'；所選路線無班次來源。':'。'}`;
- $('realtime-disclosure').textContent=live?(cityId==='hongkong'?'即時到站預測；抵站前 90 秒的動畫僅示意，並非列車定位。':cityId==='taipei'?'近期進站事件，離站後以官方站間秒數推估；不是完整車隊或 GPS。':'官方站點／狀態；站間位置示意，無 GPS 座標。'):'依城市當地時間推估運行；未涵蓋臨時延誤或停駛。';
- renderTrains();
+ $('realtime-disclosure').textContent=live?(cityId==='hongkong'?'即時到站預測；抵站前 90 秒的動畫僅示意，並非列車定位。':cityId==='taipei'?'班距推估與局部進站事件並列，可能重疊；無逐車識別或 GPS，不將事件冒認為推估班次。':'官方站點／狀態；站間位置示意，無 GPS 座標。'):'依城市當地時間推估運行；未涵蓋臨時延誤或停駛。';
+ renderTrains();renderBoard();renderFollow();
 }
 function renderTrains(){
  const container=$('realtime-trains'),visible=trains.slice(0,shown);$('train-total').textContent=String(trains.length);$('show-more').hidden=trains.length<=shown;
@@ -106,26 +107,68 @@ function renderTrains(){
  const focused=container.contains(document.activeElement),existing=new Map([...container.querySelectorAll('button')].map(b=>[b.dataset.id,b]));
  if(!focused)for(const child of [...container.children])if(!visible.some(t=>t.id===child.dataset.id))child.remove();
  for(const train of visible){
-  let button=existing.get(train.id);if(!button){if(focused)continue;button=node('button');button.className='realtime-train';button.dataset.id=train.id;button.append(node('strong'),node('span'),node('small'));button.onclick=()=>{selected=train.id;focusPoint(train);$('realtime-hover').textContent=`${lineName(train.lineId)} · ${describe(train)}`;};container.append(button);}
+  let button=existing.get(train.id);if(!button){if(focused)continue;button=node('button');button.className='realtime-train';button.dataset.id=train.id;button.append(node('strong'),node('span'),node('small'));button.onclick=()=>followTrain(train);container.append(button);}
   button.style.setProperty('--train-color',lineById.get(train.lineId)?.color||'#466d80');button.setAttribute('aria-pressed',String(selected===train.id));button.children[0].textContent=`${train.name||lineName(train.lineId)}${train.destination?' → '+name(train.destination):''}`;button.children[1].textContent=describe(train);button.children[2].textContent=quality[train.kind]||'時刻推估';
  }
 }
+function fillStations(){
+ const select=$('realtime-station'),search=$('station-search').value.trim().toLocaleLowerCase();
+ select.replaceChildren(node('option','點選地圖車站，或在此選站'));select.firstChild.value='';
+ for(const station of snapshot.stations.filter(s=>s.name.toLocaleLowerCase().includes(search)||s.id===selectedStation).sort((a,b)=>a.name.localeCompare(b.name))){const option=node('option',`${station.name} · ${(station.lineIds||[]).map(lineName).join('／')}`);option.value=station.id;select.append(option);}
+ select.value=selectedStation;
+}
+function chooseStation(id){selectedStation=id;hovered=stationById.get(id);following=false;fillStations();if(hovered)focusPoint(hovered);renderBoard();renderFollow();}
+function renderBoard(){
+ const container=$('station-departures');
+ if(!started||!selectedStation){container.replaceChildren();boardRows=[];return;}
+ boardRows=timetable?.departures(selectedStation,now())||frequencyDepartures(model,frequency,selectedStation,now());
+ if(selectedLine)boardRows=boardRows.filter(row=>row.lineId===selectedLine);
+ const groups=new Map();for(const row of boardRows){const key=`${row.lineId}:${row.nextId}`;if(!groups.has(key))groups.set(key,[]);if(groups.get(key).length<4)groups.get(key).push(row);}
+ const visible=[...groups.values()].flat(),focused=container.contains(document.activeElement),key=visible.map(row=>`${row.id}:${row.stationId}`).join('|');
+ if(container.dataset.key!==key&&!focused){container.replaceChildren();for(const rows of groups.values()){
+   const group=node('div');group.className='departure-direction';const title=node('h3',`${lineName(rows[0].lineId)} · 經 ${name(rows[0].nextId)}`);title.style.borderColor=lineById.get(rows[0].lineId)?.color||'#617784';group.append(title);
+   for(const row of rows){const button=node('button');button.className='departure-row';button.dataset.id=row.id;button.append(node('strong'),node('span'),node('small'));button.onclick=()=>followTrain(row);group.append(button);}container.append(group);
+  }container.dataset.key=key;
+ }
+ for(const button of container.querySelectorAll('button')){const row=boardRows.find(r=>r.id===button.dataset.id);if(!row){button.disabled=true;continue;}button.disabled=false;button.setAttribute('aria-pressed',String(selected===row.id));button.children[0].textContent=`往 ${name(row.destination)}`;button.children[1].textContent=`${cityTime(row.departureAt,timeZone).clock} · 約 ${Math.max(0,Math.ceil((row.departureAt-now())/1000))} 秒後發車`;button.children[2].textContent=quality[row.kind]||'時刻推估';}
+ if(!visible.length&&!focused){container.replaceChildren(node('p','此站未來 30 分鐘沒有已收錄的發車資料；終點站不列入該方向。'));container.dataset.key='';}
+}
+function followTrain(train){
+ selected=train.id;followed=train;following=true;
+ if(selectedLine&&train.lineId!==selectedLine){selectedLine='';$('realtime-line').value='';}
+ const point=sampleTrain(train,now())||train;focusPoint(point);renderFollow();renderTrains();
+}
+function currentFollow(){return selected&&(trains.find(t=>t.id===selected)||trains.find(t=>followed?.operationId&&t.operationId===followed.operationId)||followed);}
+function followPosition(){const train=currentFollow();if(!train||!train.motion&&!trains.some(t=>t.id===train.id))return null;return sampleTrain(train,now())||(train.departureAt>=now()?train:null);}
+function renderFollow(){
+ const card=$('follow-card'),train=currentFollow();card.hidden=!train;if(!train)return;
+ followed=train;selected=train.id;const point=followPosition();if(!point)following=false;
+ $('follow-title').textContent=`${lineName(train.lineId)} → ${name(train.destination)}`;
+ $('follow-state').textContent=!point?'此班次已結束':following?'持續跟車中':'已解除跟車';
+ $('follow-detail').textContent=point?(point===train&&train.departureAt>now()?`等待始發 · 約 ${Math.ceil((train.departureAt-now())/1000)} 秒`:describe(point)):'此班次已結束，請選擇其他班次。';
+ $('follow-quality').textContent=quality[train.kind]||'時刻推估';$('follow-toggle').textContent=following?'解除跟車':'繼續跟車';$('follow-toggle').setAttribute('aria-pressed',String(following));$('follow-toggle').disabled=!point;
+}
+function detachFollow(){if(following){following=false;renderFollow();}}
+fillStations();$('station-search').oninput=fillStations;$('realtime-station').onchange=()=>chooseStation($('realtime-station').value);
+$('follow-toggle').onclick=()=>{following=!following;renderFollow();};$('follow-close').onclick=()=>{following=false;selected=null;followed=null;renderFollow();};
 function focusPoint(point){zoom=Math.max(zoom,3);const scale=Math.min(canvas.clientWidth/1100,(canvas.clientHeight-60)/700)*zoom;panX=(550-point.x)*scale;panY=(350-point.y)*scale;}
 function zoomAt(next,x,y){const previous=zoom,cx=canvas.clientWidth/2,cy=(canvas.clientHeight+60)/2;zoom=Math.max(.7,Math.min(16,next));panX=(panX+cx-x)*zoom/previous-cx+x;panY=(panY+cy-y)*zoom/previous-cy+y;}
 function draw(){
  const second=Math.floor(now()/1000);if(second!==previousSecond){previousSecond=second;update();}
+ drawnTrains=trains.map(t=>sampleTrain(t,now())).filter(Boolean);const tracked=followPosition();if(following&&tracked){focusPoint(tracked);if(!drawnTrains.some(t=>t.id===selected))drawnTrains.push(tracked);}
  const rect=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2),w=Math.round(rect.width*dpr),h=Math.round(rect.height*dpr),scale=Math.min(rect.width/1100,(rect.height-60)/700)*zoom;
  if(w&&h&&scale>0){
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
   transform={scale,x:(rect.width-1100*scale)/2+panX,y:60+(rect.height-60-700*scale)/2+panY};
-  const key=[w,h,scale,transform.x,transform.y,selectedLine,display.values.line,display.values.station].join(':');
-  if(background?.key!==key){const layer=background?.canvas||document.createElement('canvas');layer.width=w;layer.height=h;const c=layer.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.fillStyle='#d1e5ec';c.fillRect(0,0,rect.width,rect.height);c.translate(transform.x,transform.y);c.scale(scale,scale);paintTerrain(c,model.city,scale);
+  const priority=new Set([selectedStation,tracked?.fromId,tracked?.toId]),padding=256,key=[w,h,scale,selectedLine,display.values.line,display.values.station,...priority].join(':');
+  if(background?.key!==key||Math.abs(background.x-transform.x)>padding||Math.abs(background.y-transform.y)>padding){const layer=background?.canvas||document.createElement('canvas');layer.width=w+padding*2*dpr;layer.height=h+padding*2*dpr;const c=layer.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.fillStyle='#d1e5ec';c.fillRect(0,0,layer.width/dpr,layer.height/dpr);c.translate(transform.x+padding,transform.y+padding);c.scale(scale,scale);paintTerrain(c,model.city,scale);
    paintRailLines(c,snapshot.legs.map(l=>({...l,color:selectedLine&&l.lineId!==selectedLine||!covered.has(l.lineId)?'#aabac2':l.color})),scale,display.values.line/100);
-   for(const s of snapshot.stations){c.beginPath();c.arc(s.x,s.y,2.2*display.values.station/100/scale,0,Math.PI*2);c.fillStyle='#fff';c.fill();c.lineWidth=.8/scale;c.strokeStyle='#627b88';c.stroke();if(zoom>=2.5&&(!selectedLine||s.lineIds.includes(selectedLine))){c.font=`${9/scale}px sans-serif`;c.strokeStyle='#fffffff0';c.lineWidth=3/scale;c.strokeText(s.name,s.x+4/scale,s.y-4/scale);c.fillStyle='#3d5666';c.fillText(s.name,s.x+4/scale,s.y-4/scale);}}
-   background={key,canvas:layer};
+   const labels=[];
+   for(const s of [...snapshot.stations].sort((a,b)=>Number(priority.has(b.id))-Number(priority.has(a.id)))){c.beginPath();c.arc(s.x,s.y,2.2*display.values.station/100/scale,0,Math.PI*2);c.fillStyle='#fff';c.fill();c.lineWidth=.8/scale;c.strokeStyle='#627b88';c.stroke();if(zoom>=2.5&&(!selectedLine||s.lineIds.includes(selectedLine))){c.font=`${9/scale}px sans-serif`;const box={x:s.x+4/scale,y:s.y-13/scale,w:c.measureText(s.name).width+4/scale,h:14/scale};if(labels.some(b=>box.x<b.x+b.w&&box.x+box.w>b.x&&box.y<b.y+b.h&&box.y+box.h>b.y))continue;labels.push(box);c.strokeStyle='#fffffff0';c.lineWidth=3/scale;c.strokeText(s.name,s.x+4/scale,s.y-4/scale);c.fillStyle='#3d5666';c.fillText(s.name,s.x+4/scale,s.y-4/scale);}}
+   background={key,canvas:layer,x:transform.x,y:transform.y};
   }
-  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.drawImage(background.canvas,0,0,w,h,0,0,rect.width,rect.height);ctx.translate(transform.x,transform.y);ctx.scale(scale,scale);
-  for(const t of trains){if(!Number.isFinite(t.x)||!Number.isFinite(t.y))continue;ctx.save();ctx.translate(t.x,t.y);ctx.rotate(t.angle||0);const size=display.values.train/100;ctx.scale(size,size);ctx.fillStyle=lineById.get(t.lineId)?.color||'#456e84';ctx.strokeStyle='#fff';ctx.lineWidth=1.2/scale;ctx.beginPath();
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.drawImage(background.canvas,(transform.x-background.x)-padding,(transform.y-background.y)-padding,background.canvas.width/dpr,background.canvas.height/dpr);ctx.translate(transform.x,transform.y);ctx.scale(scale,scale);
+  for(const t of drawnTrains){if(!Number.isFinite(t.x)||!Number.isFinite(t.y))continue;ctx.save();ctx.translate(t.x,t.y);ctx.rotate(t.angle||0);const size=display.values.train/100;ctx.scale(size,size);ctx.fillStyle=lineById.get(t.lineId)?.color||'#456e84';ctx.strokeStyle='#fff';ctx.lineWidth=1.2/scale;ctx.beginPath();
    if(Number.isFinite(t.angle)){ctx.moveTo(-4.5/scale,-2/scale);ctx.lineTo(1.5/scale,-2/scale);ctx.lineTo(4.5/scale,0);ctx.lineTo(1.5/scale,2/scale);ctx.lineTo(-4.5/scale,2/scale);ctx.closePath();}
    else ctx.roundRect(-4.5/scale,-2/scale,9/scale,4/scale,1/scale);
    ctx.fill();ctx.stroke();if(selected===t.id){ctx.beginPath();ctx.arc(0,0,9/scale,0,Math.PI*2);ctx.strokeStyle='#263f52';ctx.lineWidth=1/scale;ctx.stroke();}ctx.restore();}
@@ -133,22 +176,24 @@ function draw(){
  }
  requestAnimationFrame(draw);
 }
-function inspect(event){
+function inspect(event,activate=false){
  const r=canvas.getBoundingClientRect(),p={x:(event.clientX-r.left-transform.x)/transform.scale,y:(event.clientY-r.top-transform.y)/transform.scale},radius=(event.pointerType==='touch'?16:8)/transform.scale;
- const nearest=items=>items.reduce((best,item)=>{const d=Math.hypot(item.x-p.x,item.y-p.y);return d<radius&&(!best||d<Math.hypot(best.x-p.x,best.y-p.y))?item:best;},null),train=nearest(trains);hovered=nearest(snapshot.stations);
- if(train){selected=train.id;$('realtime-hover').textContent=`${lineName(train.lineId)} · ${describe(train)} · ${quality[train.kind]||'推估'}`;}
+ const nearest=items=>items.reduce((best,item)=>{const d=Math.hypot(item.x-p.x,item.y-p.y);return d<radius&&(!best||d<Math.hypot(best.x-p.x,best.y-p.y))?item:best;},null),train=nearest(drawnTrains);hovered=nearest(snapshot.stations);
+ if(train){if(activate)followTrain(train);$('realtime-hover').textContent=`${lineName(train.lineId)} · ${describe(train)} · ${quality[train.kind]||'推估'}`;}
  else $('realtime-hover').textContent=hovered?`${hovered.name} · ${(hovered.lineIds||[]).map(lineName).join('／')}`:'點選車站或列車查看資訊 · 雙指縮放／拖曳平移';
+ if(activate&&!train&&hovered)chooseStation(hovered.id);
 }
-$('zoom-in').onclick=()=>zoomAt(zoom*1.4,canvas.clientWidth/2,canvas.clientHeight/2);$('zoom-out').onclick=()=>zoomAt(zoom/1.4,canvas.clientWidth/2,canvas.clientHeight/2);$('zoom-fit').onclick=()=>{zoom=1;panX=panY=0;selected=null;};
+$('zoom-in').onclick=()=>zoomAt(zoom*1.4,canvas.clientWidth/2,canvas.clientHeight/2);$('zoom-out').onclick=()=>zoomAt(zoom/1.4,canvas.clientWidth/2,canvas.clientHeight/2);$('zoom-fit').onclick=()=>{zoom=1;panX=panY=0;detachFollow();};
 canvas.addEventListener('wheel',e=>{e.preventDefault();const r=canvas.getBoundingClientRect();zoomAt(zoom*Math.exp(-e.deltaY*.001),e.clientX-r.left,e.clientY-r.top);},{passive:false});
-canvas.addEventListener('pointerdown',e=>{if(e.button!==0||pinch.active)return;inspect(e);drag={x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId);});
-canvas.addEventListener('pointermove',e=>{if(drag){panX+=e.clientX-drag.x;panY+=e.clientY-drag.y;drag={x:e.clientX,y:e.clientY};}else inspect(e);});
-for(const event of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(event,()=>{drag=null;});
-canvas.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();panX+=e.key==='ArrowLeft'?30:e.key==='ArrowRight'?-30:0;panY+=e.key==='ArrowUp'?30:e.key==='ArrowDown'?-30:0;}});
-const pinch=mountPinchZoom(canvas,{cancel:()=>{drag=null;},zoom:(ratio,from,to)=>{zoomAt(zoom*ratio,from.x,from.y);panX+=to.x-from.x;panY+=to.y-from.y;}});
-$('realtime-line').onchange=()=>{selectedLine=$('realtime-line').value;shown=30;selected=null;update();};$('show-more').onclick=()=>{shown+=30;renderTrains();};$('live-refresh').onclick=refresh;
+canvas.addEventListener('pointerdown',e=>{if(e.button!==0||pinch.active)return;drag={x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,moved:false};canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{if(drag){if(Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)>5)drag.moved=true;if(drag.moved){detachFollow();panX+=e.clientX-drag.x;panY+=e.clientY-drag.y;}drag.x=e.clientX;drag.y=e.clientY;}else inspect(e);});
+canvas.addEventListener('pointerup',e=>{if(drag&&!drag.moved&&!pinch.active)inspect(e,true);drag=null;});
+for(const event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,()=>{drag=null;});
+canvas.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();detachFollow();panX+=e.key==='ArrowLeft'?30:e.key==='ArrowRight'?-30:0;panY+=e.key==='ArrowUp'?30:e.key==='ArrowDown'?-30:0;}});
+const pinch=mountPinchZoom(canvas,{cancel:()=>{drag=null;detachFollow();},zoom:(ratio,from,to)=>{zoomAt(zoom*ratio,from.x,from.y);panX+=to.x-from.x;panY+=to.y-from.y;}});
+$('realtime-line').onchange=()=>{selectedLine=$('realtime-line').value;shown=30;selected=null;followed=null;following=false;update();};$('show-more').onclick=()=>{shown+=30;renderTrains();};$('live-refresh').onclick=refresh;
 $('realtime-start').onclick=()=>{started=true;display.lock();$('realtime-setup').close();update();refresh();canvas.focus();};$('realtime-setup').addEventListener('cancel',e=>e.preventDefault());
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){update();if(Date.now()-lastAttempt>30000)refresh();}});
 setInterval(()=>{if(started){update();if(Date.now()-lastAttempt>=30000)refresh();}},1000);
 $('live-refresh').disabled=!canRefresh;update();$('realtime-setup').showModal();requestAnimationFrame(draw);
-if(query.has('test'))window.realtimeTransit={model,get cityId(){return cityId;},get trains(){return trains;},get display(){return display.values;},get view(){return {...transform,zoom};},get expired(){return expired;},setTime(value){testNow=value;update();},refresh,update};
+if(query.has('test'))window.realtimeTransit={model,get cityId(){return cityId;},get trains(){return trains;},get drawnTrains(){return drawnTrains;},get boardRows(){return boardRows;},get following(){return following;},get selected(){return selected;},get display(){return display.values;},get view(){return {...transform,zoom};},get expired(){return expired;},setTime(value){testNow=value;update();},chooseStation,refresh,update};

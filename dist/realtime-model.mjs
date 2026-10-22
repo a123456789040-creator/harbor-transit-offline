@@ -54,9 +54,23 @@ export function sampleRoute(route,fraction){
   const point=samplePath(route.path,fraction);
   return {...point,angle:point.angle+(route.fractions[0]>route.fractions.at(-1)?Math.PI:0)};
 }
-function positioned(run,phase,route,day,start=0){
+function positioned(run,phase,route,day,start=0,serviceEpoch=0){
   const fraction=route.fractions[phase.from]+(route.fractions[phase.to]-route.fractions[phase.from])*phase.progress,point=sampleRoute(route,fraction);
-  return {...point,id:`${day.date}:${run.id}`,operationId:run.operationId?`${day.date}:${run.operationId}`:null,lineId:run.lineId,name:run.name,stationIds:run.stationIds,fromId:run.stationIds[phase.from],toId:run.stationIds[phase.to],destination:run.destination||run.stationIds.at(-1),atStation:phase.atStation,nextIn:Math.max(0,phase.nextAt+start-day.seconds),kind:run.kind||'timetable',source:run.source};
+  const train={...point,id:`${day.date}:${run.id}`,operationId:run.operationId?`${day.date}:${run.operationId}`:null,lineId:run.lineId,name:run.name,stationIds:run.stationIds,fromId:run.stationIds[phase.from],toId:run.stationIds[phase.to],destination:run.destination||run.stationIds.at(-1),atStation:phase.atStation,nextIn:Math.max(0,phase.nextAt+start-day.seconds),kind:run.kind||'timetable',source:run.source};
+  Object.defineProperty(train,'motion',{value:{run,route,date:day.date,start,serviceEpoch}});return train;
+}
+export function sampleTrain(train,now){
+  if(!train.motion)return train;
+  const {run,route,date,start,serviceEpoch}=train.motion,seconds=(now-serviceEpoch)/1000,phase=locateRun(run.arrivals,run.departures,seconds-start);
+  return phase?positioned(run,phase,route,{date,seconds},start,serviceEpoch):null;
+}
+function departure(run,route,day,start,index,now){
+  const serviceEpoch=now-day.seconds*1000,departureAt=serviceEpoch+(start+(run.departures[index]??run.arrivals[index]))*1000;
+  const train=positioned(run,{from:index,to:index,progress:0,atStation:true,nextAt:0},route,day,start,serviceEpoch);
+  return Object.assign(train,{stationId:run.stationIds[index],nextId:run.stationIds[index+1],departureAt});
+}
+function departureDays(now,zone,window){
+  return [...new Map([...serviceDays(now,zone),...serviceDays(now+window,zone).map(d=>({...d,seconds:d.seconds-window/1000}))].map(d=>[d.date,d])).values()];
 }
 export function createTimetable(model,data){
   const resolve=createRouteResolver(model),ny=data.city==='newyork',timeZone=ny?data.timezone:data.metadata.timeZone,cityId=model.cityId,lines=new Set(),runs=[];
@@ -80,12 +94,28 @@ export function createTimetable(model,data){
         if(run.calendar?!calendarActive(run.calendar,day):(!run.dayTypes.includes(dayType)||run.validFrom&&day.date<run.validFrom||run.validUntil&&day.date>run.validUntil))continue;
         const phase=locateRun(run.arrivals,run.departures,day.seconds-run.start);if(!phase)continue;
         const route=resolve(run.lineId,run.stationIds,run.hint);if(!route)continue;
-        trains.push(positioned(run,phase,route,day,run.start));
+        trains.push(positioned(run,phase,route,day,run.start,now-day.seconds*1000));
       }
     }
     // A through train belongs to both physical segments at their shared station time.
     const seen=new Set(),unique=trains.filter(t=>{if(!t.operationId||!t.atStation)return true;const key=`${t.operationId}:${t.fromId}`;if(seen.has(key))return false;seen.add(key);return true;});
     return {trains:unique,expired,expiredServices};
+  },departures(stationId,now,window=1800000){
+    const rows=[];
+    for(const day of departureDays(now,timeZone,window)){
+      if(data.validFrom&&day.date<data.validFrom||data.validUntil&&day.date>data.validUntil)continue;
+      const dayType=holidays.has(day.date)?'sunday':day.dayType;
+      for(const run of runs){
+        if(run.calendar?!calendarActive(run.calendar,day):(!run.dayTypes.includes(dayType)||run.validFrom&&day.date<run.validFrom||run.validUntil&&day.date>run.validUntil))continue;
+        for(let index=0;index<run.stationIds.length-1;index++){
+          if(run.stationIds[index]!==stationId)continue;
+          const wait=run.start+(run.departures[index]??run.arrivals[index])-day.seconds;
+          if(wait<0||wait>window/1000)continue;
+          const route=resolve(run.lineId,run.stationIds,run.hint);if(route)rows.push(departure(run,route,day,run.start,index,now));
+        }
+      }
+    }
+    return rows.sort((a,b)=>a.departureAt-b.departureAt);
   }};
 }
 // shortcut: frequency anchors are illustrative; replace them when a current individual departure timetable is available.
@@ -94,9 +124,21 @@ export function frequencyFrame(model,patterns,now){
   for(const p of patterns)for(const day of days){
     if(p.dayTypes&&!p.dayTypes.includes(day.dayType)||p.validFrom&&day.date<p.validFrom||p.validUntil&&day.date>p.validUntil)continue;
     const runtime=p.arrivals.at(-1),first=Math.max(p.start,p.start+Math.ceil((day.seconds-runtime-p.start)/p.headway)*p.headway),end=Math.min(day.seconds,p.end);
-    for(let start=first;start<=end;start+=p.headway){const phase=locateRun(p.arrivals,p.departures,day.seconds-start);if(!phase)continue;trains.push(positioned({...p,id:`${p.id}:${start}`,kind:'frequency-estimate'},phase,p.route,day,start));}
+    for(let start=first;start<=end;start+=p.headway){const phase=locateRun(p.arrivals,p.departures,day.seconds-start);if(!phase)continue;trains.push(positioned({...p,id:`${p.id}:${start}`,kind:'frequency-estimate'},phase,p.route,day,start,now-day.seconds*1000));}
   }
   return trains;
+}
+export function frequencyDepartures(model,patterns,stationId,now,window=1800000){
+  const rows=[];
+  for(const p of patterns)for(const day of departureDays(now,REALTIME_ZONES[model.cityId],window)){
+    if(p.dayTypes&&!p.dayTypes.includes(day.dayType)||p.validFrom&&day.date<p.validFrom||p.validUntil&&day.date>p.validUntil)continue;
+    for(let index=0;index<p.stationIds.length-1;index++){
+      if(p.stationIds[index]!==stationId)continue;
+      const offset=p.departures[index]??p.arrivals[index],first=p.start+Math.max(0,Math.ceil((day.seconds-offset-p.start)/p.headway))*p.headway,end=Math.min(p.end,day.seconds+window/1000-offset);
+      for(let start=first;start<=end;start+=p.headway)rows.push(departure({...p,id:`${p.id}:${start}`,kind:'frequency-estimate'},p.route,day,start,index,now));
+    }
+  }
+  return rows.sort((a,b)=>a.departureAt-b.departureAt);
 }
 export function sourceTimestamp(value){
   if(typeof value!=='string')return NaN;const parts=value.match(/^(\d{4})-?(\d{2})-?(\d{2})[ T]?(\d{2}):?(\d{2}):?(\d{2})$/);
